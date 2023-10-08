@@ -31,7 +31,10 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
+	// TODO 在这里实现 worker -> send an RPC to the coordinator asking for a task
+
+
+	// TODO 获取 task 之后执行相应的任务
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
