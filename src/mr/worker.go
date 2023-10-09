@@ -1,20 +1,30 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-import "os"
-import "io/ioutil"
-import "encoding/json"
-import "strconv"
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"time"
+)
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// 定义 SortedKey ,
+type SortedKey []KeyValue
+
+func (s SortedKey) Len() int           { return len(s) }
+func (s SortedKey) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s SortedKey) Less(i, j int) bool { return s[i].Key < s[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -39,7 +49,8 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 		case ReduceTask:
 			{
-				// TODO 执行相应的 ReduceTask
+				DoReduceTask(reducef, &task)
+				callDone(&task)
 			}
 		case WaittingTask:
 			{
@@ -70,7 +81,7 @@ func getTask() Task {
 }
 
 func DoMapTask(mapf func(string, string) []KeyValue, response *Task) {
-	filename := response.Filename
+	filename := response.FileSlice[0]
 	var mapRes []KeyValue
 	file, err := os.Open(filename)
 	if err != nil {
@@ -101,6 +112,59 @@ func DoMapTask(mapf func(string, string) []KeyValue, response *Task) {
 		}
 		ofile.Close()
 	}
+}
+
+func DoReduceTask(reducef func(string, []string) string, response *Task) {
+	input := shuffle(response.FileSlice)
+	// 获取当前工作目录
+	dir, _ := os.Getwd()
+	// 创建存储 reduce 输出结果的临时文件
+	outputTempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	if err != nil {
+		log.Fatal("Failed to create reduce output file", err)
+	}
+	i := 0
+	for i < len(input) {
+		// 具有相同 Key 的数据项的结束位置
+		sameKeyIndex := i
+		for sameKeyIndex < len(input) && input[sameKeyIndex].Key == input[i].Key {
+			sameKeyIndex++
+		}
+		var values []string
+		for k := i; k < sameKeyIndex; k++ {
+			// 遍历具有相同 Key 的数据项，将它们的值添加到 values 中
+			values = append(values, input[k].Value)
+		}
+		// 调用用户提供的 reducef 函数，传递当前 Key 和对应的值列表 values，以执行 Reduce 操作，将结果存储在 output 变量中
+		outputValue := reducef(input[i].Key, values)
+		// 将 Reduce 操作的结果格式化为 "Key Value\n" 的形式并写入临时文件，
+		fmt.Fprintf(outputTempFile, "%v %v\n", input[i].Key, outputValue)
+		i = sameKeyIndex
+	}
+	outputTempFile.Close()
+	fn := fmt.Sprintf("mr-out-%d", response.TaskId)
+	// 将临时文件重命名为最终的输出文件名，完成 Reduce 阶段的任务
+	os.Rename(outputTempFile.Name(), fn)
+}
+
+// 传入文件名数组,返回排序好的 kv 数组
+func shuffle(files []string) []KeyValue {
+	var resKv []KeyValue
+	for _, filename := range files {
+		file, _ := os.Open(filename)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			// 使用JSON解码器 dec 从文件中解码一个JSON对象，并将其存储到 kv 变量中
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			resKv = append(resKv, kv)
+		}
+		file.Close()
+	}
+	sort.Sort(SortedKey(resKv))
+	return resKv
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -158,7 +222,7 @@ func callDone(finishedTask *Task) Task {
 	ok := call("Coordinator.SetTaskDone", finishedTask, &reply)
 
 	if ok {
-		fmt.Println("callDone(): close task", &finishedTask)
+		fmt.Println("callDone(): close task", finishedTask)
 	} else {
 		fmt.Printf("call failed!\n")
 	}

@@ -30,7 +30,7 @@ type TaskArgs struct {
 type Task struct {
 	TaskId     int       // 任务唯一 id
 	TaskType   TaskType  // 任务类型 -> map/reduce
-	Filename   string    // 输入的文件
+	FileSlice  []string  // 输入的文件
 	ReducerNum int       // reducer 数量
 	State      TaskState // 任务状态
 }

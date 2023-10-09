@@ -7,6 +7,9 @@ import "net/rpc"
 import "net/http"
 import "fmt"
 import "sync"
+import "io/ioutil"
+import "strings"
+import "strconv"
 
 var mu sync.Mutex
 
@@ -35,7 +38,7 @@ func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 				*reply = *<-c.TaskChannelMap
 				if !c.judgeState(reply.TaskId) {
 					// task 不处于 Waiting 状态
-					fmt.Printf("taskid[ %d ] is running\n", reply.TaskId)
+					fmt.Printf("Map-taskid[ %d ] is running\n", reply.TaskId)
 				}
 			} else {
 				// TaskChannelMap 中没有空闲的 map 节点可以使用了
@@ -47,9 +50,29 @@ func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 			}
 
 		}
-	default:
+	case ReducePhase:
+		{
+			if len(c.TaskChannelReduce) > 0 {
+				*reply = *<-c.TaskChannelReduce
+				fmt.Printf("poll-Reduce-taskid[ %d ]\n", reply.TaskId)
+				if !c.judgeState(reply.TaskId) {
+					fmt.Printf("Reduce-taskid[ %d ] is running\n", reply.TaskId)
+				}
+			} else {
+				reply.TaskType = WaittingTask // 如果reduce任务被分发完了但是又没完成，此时就将任务设为Waitting
+				if c.checkTaskDone() {
+					c.toNextPhase()
+				}
+				return nil
+			}
+		}
+	case AllDone:
 		{
 			reply.TaskType = ExitTask
+		}
+	default:
+		{
+			panic("the phase undifined")
 		}
 	}
 	return nil
@@ -82,7 +105,7 @@ func (c *Coordinator) Done() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	if c.Phase == AllDone {
-		fmt.Printf("All tasks are finished,the coordinator will be exit! !")
+		fmt.Println("All tasks are finished,the coordinator will be exit! !")
 		return true
 	} else {
 		return false
@@ -116,12 +139,26 @@ func (c *Coordinator) makeMapTasks(files []string) {
 			TaskType:   MapTask,
 			TaskId:     id,
 			ReducerNum: c.ReducerNum,
-			Filename:   v,
+			FileSlice:  []string{v},
 			State:      Waiting,
 		}
 		c.TaskMap[id] = &task
 		fmt.Println("make a map task :", &task)
 		c.TaskChannelMap <- &task
+	}
+}
+
+func (c *Coordinator) makeReduceTasks() {
+	for i := 0; i < c.ReducerNum; i++ {
+		id := c.generateTaskId()
+		task := Task{
+			TaskId:    id,
+			TaskType:  ReduceTask,
+			FileSlice: selectReduceName(i),
+		}
+		c.TaskMap[id] = &task
+		fmt.Println("make a reduce task :", &task)
+		c.TaskChannelReduce <- &task
 	}
 }
 
@@ -176,12 +213,13 @@ func (c *Coordinator) checkTaskDone() bool {
 }
 
 func (c *Coordinator) toNextPhase() {
-	// 当前在 map 阶段
+	// 当前在 map 阶段 map -> reduce
 	if c.Phase == MapPhase {
-		// TODO
-		//c.makeReduceTasks()
+		c.makeReduceTasks()
 		c.Phase = ReducePhase
+		// 当前在 reduce 阶段 reduce -> AllDone
 	} else if c.Phase == ReducePhase {
+		fmt.Println("set the phase -> allDone")
 		c.Phase = AllDone
 	}
 }
@@ -199,8 +237,32 @@ func (c *Coordinator) SetTaskDone(args *Task, reply *Task) error {
 		} else {
 			fmt.Printf("Map task Id[%d] is already finished.\n", args.TaskId)
 		}
+	case ReduceTask:
+		task, ok := c.TaskMap[args.TaskId]
+		if ok && task.State == Working {
+			task.State = Done
+			fmt.Printf("Reduce task Id[%d] is finished.\n", args.TaskId)
+		} else {
+			fmt.Printf("Reduce task Id[%d] is already finished.\n", args.TaskId)
+		}
 	default:
 		panic("The task type undefined ! ! !")
 	}
 	return nil
+}
+
+// 从当前工作目录中读取文件列表，并选择map生成的temp文件
+func selectReduceName(reduceNum int) []string {
+	var s []string
+	// 获取当前工作目录
+	path, _ := os.Getwd()
+	// 获取当前工作目录下的所有文件
+	files, _ := ioutil.ReadDir(path)
+	for _, fi := range files {
+		// 以 "mr-tmp" 开头并且以 reduceNum 结尾
+		if strings.HasPrefix(fi.Name(), "mr-tmp") && strings.HasSuffix(fi.Name(), strconv.Itoa(reduceNum)) {
+			s = append(s, fi.Name())
+		}
+	}
+	return s
 }
