@@ -8,6 +8,7 @@ package mr
 
 import "os"
 import "strconv"
+import "time"
 
 //
 // example to show how to declare the arguments
@@ -33,6 +34,7 @@ type Task struct {
 	FileSlice  []string  // 输入的文件
 	ReducerNum int       // reducer 数量
 	State      TaskState // 任务状态
+	StartTime  time.Time // 任务开始时间
 }
 
 // TaskType 枚举

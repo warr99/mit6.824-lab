@@ -1,15 +1,18 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
-import "fmt"
-import "sync"
-import "io/ioutil"
-import "strings"
-import "strconv"
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
 
 var mu sync.Mutex
 
@@ -25,7 +28,6 @@ type Coordinator struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
-// TODO 为 worker 编写一个 RPC handlers -> 分配任务
 func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -54,9 +56,9 @@ func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 		{
 			if len(c.TaskChannelReduce) > 0 {
 				*reply = *<-c.TaskChannelReduce
-				fmt.Printf("poll-Reduce-taskid[ %d ]\n", reply.TaskId)
+				// fmt.Printf("poll-Reduce-taskid[ %d ]\n", reply.TaskId)
 				if !c.judgeState(reply.TaskId) {
-					fmt.Printf("Reduce-taskid[ %d ] is running\n", reply.TaskId)
+					fmt.Println("Reduce-task is running", reply)
 				}
 			} else {
 				reply.TaskType = WaittingTask // 如果reduce任务被分发完了但是又没完成，此时就将任务设为Waitting
@@ -72,7 +74,7 @@ func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 		}
 	default:
 		{
-			panic("the phase undifined")
+			panic("the phase undefined")
 		}
 	}
 	return nil
@@ -126,6 +128,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	c.makeMapTasks(files)
 	c.server()
+	// go c.CrashDetector()
 	return &c
 }
 
@@ -148,16 +151,19 @@ func (c *Coordinator) makeMapTasks(files []string) {
 	}
 }
 
+// 对reduce任务进行处理,初始化reduce任务
 func (c *Coordinator) makeReduceTasks() {
 	for i := 0; i < c.ReducerNum; i++ {
 		id := c.generateTaskId()
 		task := Task{
-			TaskId:    id,
-			TaskType:  ReduceTask,
-			FileSlice: selectReduceName(i),
+			TaskId:     id,
+			TaskType:   ReduceTask,
+			FileSlice:  selectReduceName(i),
+			State:      Waiting,
+			ReducerNum: c.ReducerNum,
 		}
 		c.TaskMap[id] = &task
-		fmt.Println("make a reduce task :", &task)
+		// fmt.Println("make a reduce task :", &task)
 		c.TaskChannelReduce <- &task
 	}
 }
@@ -175,7 +181,9 @@ func (c *Coordinator) judgeState(taskId int) bool {
 	if !ok || task.State != Waiting {
 		return false
 	}
+	task.StartTime = time.Now()
 	task.State = Working
+	fmt.Println("task start work:", task)
 	return true
 }
 
@@ -212,6 +220,7 @@ func (c *Coordinator) checkTaskDone() bool {
 	return false
 }
 
+// 切换到下一阶段
 func (c *Coordinator) toNextPhase() {
 	// 当前在 map 阶段 map -> reduce
 	if c.Phase == MapPhase {
@@ -241,7 +250,7 @@ func (c *Coordinator) SetTaskDone(args *Task, reply *Task) error {
 		task, ok := c.TaskMap[args.TaskId]
 		if ok && task.State == Working {
 			task.State = Done
-			fmt.Printf("Reduce task Id[%d] is finished.\n", args.TaskId)
+			fmt.Println("Reduce task  is finished: \n", args)
 		} else {
 			fmt.Printf("Reduce task Id[%d] is already finished.\n", args.TaskId)
 		}
@@ -265,4 +274,35 @@ func selectReduceName(reduceNum int) []string {
 		}
 	}
 	return s
+}
+
+func (c *Coordinator) CrashDetector() {
+	for {
+		// 每次执行任务会先休眠 2s
+		time.Sleep(time.Second * 2)
+		mu.Lock()
+		// 如果任务已经处于完成阶段
+		if c.Phase == AllDone {
+			mu.Unlock()
+			break
+		}
+		for _, task := range c.TaskMap {
+			// 如果任务在工作中且距离开始时间已经过去 10s -> 认为任务已经崩溃
+			if task.State == Working && time.Since(task.StartTime) > 10*time.Second {
+				fmt.Println("the task", task.TaskId, " is crash,take ", time.Since(task.StartTime).Seconds(), "s")
+				// 根据任务类型,将任务发送到不同的管道,将任务的状态设置为 Waiting,等待重新执行
+				switch task.TaskType {
+				case MapTask:
+					fmt.Println("send task to TaskChannelMap:", task)
+					task.State = Waiting
+					c.TaskChannelMap <- task
+				case ReduceTask:
+					fmt.Println("send task to TaskChannelReduce:", task)
+					task.State = Waiting
+					c.TaskChannelReduce <- task
+				}
+			}
+		}
+		mu.Unlock()
+	}
 }

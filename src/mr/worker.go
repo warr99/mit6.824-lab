@@ -22,9 +22,10 @@ type KeyValue struct {
 // 定义 SortedKey ,
 type SortedKey []KeyValue
 
-func (s SortedKey) Len() int           { return len(s) }
-func (s SortedKey) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s SortedKey) Less(i, j int) bool { return s[i].Key < s[j].Key }
+// Len 重写len,swap,less才能排序
+func (k SortedKey) Len() int           { return len(k) }
+func (k SortedKey) Swap(i, j int)      { k[i], k[j] = k[j], k[i] }
+func (k SortedKey) Less(i, j int) bool { return k[i].Key < k[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -81,8 +82,8 @@ func getTask() Task {
 }
 
 func DoMapTask(mapf func(string, string) []KeyValue, response *Task) {
+	var intermediate []KeyValue
 	filename := response.FileSlice[0]
-	var mapRes []KeyValue
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -93,105 +94,76 @@ func DoMapTask(mapf func(string, string) []KeyValue, response *Task) {
 		log.Fatalf("cannot read %v", filename)
 	}
 	file.Close()
-	mapRes = mapf(filename, string(content))
-	reducerNum := response.ReducerNum
-	// 遍历 mapRes 中的键值对，对每个键值对进行哈希操作（通过 ihash 函数），然后根据哈希值将键值对添加到对应的 Reducer 的切片中
+	// map返回一组KV结构体数组
+	intermediate = mapf(filename, string(content))
+	//initialize and loop over []KeyValue
+	rn := response.ReducerNum
 	// 创建一个长度为nReduce的二维切片
-	HashedKV := make([][]KeyValue, reducerNum)
-	for _, kv := range mapRes {
-		HashedKV[ihash(kv.Key)%reducerNum] = append(HashedKV[ihash(kv.Key)%reducerNum], kv)
+	HashedKV := make([][]KeyValue, rn)
+	for _, kv := range intermediate {
+		HashedKV[ihash(kv.Key)%rn] = append(HashedKV[ihash(kv.Key)%rn], kv)
 	}
-	// 循环遍历每个 Reducer，为每个 Reducer 创建一个临时文件，并将属于该 Reducer 的键值对写入该文件中，使用 JSON 编码
-	for i := 0; i < reducerNum; i++ {
+	for i := 0; i < rn; i++ {
 		oname := "mr-tmp-" + strconv.Itoa(response.TaskId) + "-" + strconv.Itoa(i)
 		ofile, _ := os.Create(oname)
 		enc := json.NewEncoder(ofile)
-		fmt.Println("make a temp file ", oname)
 		for _, kv := range HashedKV[i] {
-			enc.Encode(kv)
+			err := enc.Encode(kv)
+			if err != nil {
+				return
+			}
 		}
 		ofile.Close()
 	}
 }
 
 func DoReduceTask(reducef func(string, []string) string, response *Task) {
-	input := shuffle(response.FileSlice)
-	// 获取当前工作目录
+	reduceFileNum := response.TaskId
+	intermediate := shuffle(response.FileSlice)
 	dir, _ := os.Getwd()
-	// 创建存储 reduce 输出结果的临时文件
-	outputTempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	//tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
 	if err != nil {
-		log.Fatal("Failed to create reduce output file", err)
+		log.Fatal("Failed to create temp file", err)
 	}
 	i := 0
-	for i < len(input) {
-		// 具有相同 Key 的数据项的结束位置
-		sameKeyIndex := i
-		for sameKeyIndex < len(input) && input[sameKeyIndex].Key == input[i].Key {
-			sameKeyIndex++
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
 		}
 		var values []string
-		for k := i; k < sameKeyIndex; k++ {
-			// 遍历具有相同 Key 的数据项，将它们的值添加到 values 中
-			values = append(values, input[k].Value)
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
 		}
-		// 调用用户提供的 reducef 函数，传递当前 Key 和对应的值列表 values，以执行 Reduce 操作，将结果存储在 output 变量中
-		outputValue := reducef(input[i].Key, values)
-		// 将 Reduce 操作的结果格式化为 "Key Value\n" 的形式并写入临时文件，
-		fmt.Fprintf(outputTempFile, "%v %v\n", input[i].Key, outputValue)
-		i = sameKeyIndex
+		output := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
+		i = j
 	}
-	outputTempFile.Close()
-	fn := fmt.Sprintf("mr-out-%d", response.TaskId)
-	// 将临时文件重命名为最终的输出文件名，完成 Reduce 阶段的任务
-	os.Rename(outputTempFile.Name(), fn)
+	tempFile.Close()
+
+	// 在完全写入后进行重命名
+	fn := fmt.Sprintf("mr-out-%d", reduceFileNum)
+	os.Rename(tempFile.Name(), fn)
 }
 
 // 传入文件名数组,返回排序好的 kv 数组
 func shuffle(files []string) []KeyValue {
-	var resKv []KeyValue
-	for _, filename := range files {
-		file, _ := os.Open(filename)
+	var kva []KeyValue
+	for _, filepath := range files {
+		file, _ := os.Open(filepath)
 		dec := json.NewDecoder(file)
 		for {
 			var kv KeyValue
-			// 使用JSON解码器 dec 从文件中解码一个JSON对象，并将其存储到 kv 变量中
 			if err := dec.Decode(&kv); err != nil {
 				break
 			}
-			resKv = append(resKv, kv)
+			kva = append(kva, kv)
 		}
 		file.Close()
 	}
-	sort.Sort(SortedKey(resKv))
-	return resKv
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
+	sort.Sort(SortedKey(kva))
+	return kva
 }
 
 // send an RPC request to the coordinator, wait for the response.
