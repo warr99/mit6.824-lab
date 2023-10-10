@@ -56,7 +56,6 @@ func (c *Coordinator) PollTask(args *TaskArgs, reply *Task) error {
 		{
 			if len(c.TaskChannelReduce) > 0 {
 				*reply = *<-c.TaskChannelReduce
-				// fmt.Printf("poll-Reduce-taskid[ %d ]\n", reply.TaskId)
 				if !c.judgeState(reply.TaskId) {
 					fmt.Println("Reduce-task is running", reply)
 				}
@@ -107,7 +106,7 @@ func (c *Coordinator) Done() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	if c.Phase == AllDone {
-		fmt.Println("All tasks are finished,the coordinator will be exit! !")
+		fmt.Println("[INFO] All tasks are finished,the coordinator will be exit.")
 		return true
 	} else {
 		return false
@@ -146,7 +145,6 @@ func (c *Coordinator) makeMapTasks(files []string) {
 			State:      Waiting,
 		}
 		c.TaskMap[id] = &task
-		fmt.Println("make a map task :", &task)
 		c.TaskChannelMap <- &task
 	}
 }
@@ -163,7 +161,6 @@ func (c *Coordinator) makeReduceTasks() {
 			ReducerNum: c.ReducerNum,
 		}
 		c.TaskMap[id] = &task
-		// fmt.Println("make a reduce task :", &task)
 		c.TaskChannelReduce <- &task
 	}
 }
@@ -183,7 +180,6 @@ func (c *Coordinator) judgeState(taskId int) bool {
 	}
 	task.StartTime = time.Now()
 	task.State = Working
-	fmt.Println("task start work:", task)
 	return true
 }
 
@@ -228,7 +224,6 @@ func (c *Coordinator) toNextPhase() {
 		c.Phase = ReducePhase
 		// 当前在 reduce 阶段 reduce -> AllDone
 	} else if c.Phase == ReducePhase {
-		fmt.Println("set the phase -> allDone")
 		c.Phase = AllDone
 	}
 }
@@ -242,20 +237,20 @@ func (c *Coordinator) SetTaskDone(args *Task, reply *Task) error {
 		task, ok := c.TaskMap[args.TaskId]
 		if ok && task.State == Working {
 			task.State = Done
-			fmt.Printf("Map task Id[%d] is finished.\n", args.TaskId)
+			// fmt.Printf("Map task Id[%d] is finished.\n", args.TaskId)
 		} else {
-			fmt.Printf("Map task Id[%d] is already finished.\n", args.TaskId)
+			fmt.Printf("[INFO] Map task Id[%d] is already finished.\n", args.TaskId)
 		}
 	case ReduceTask:
 		task, ok := c.TaskMap[args.TaskId]
 		if ok && task.State == Working {
 			task.State = Done
-			fmt.Println("Reduce task  is finished: \n", args)
+			// fmt.Printf("[INFO] ReduceTask task Id[%d] is finished,\n", args.TaskId)
 		} else {
 			fmt.Printf("Reduce task Id[%d] is already finished.\n", args.TaskId)
 		}
 	default:
-		panic("The task type undefined ! ! !")
+		panic("[REEOR] The task type undefined")
 	}
 	return nil
 }
@@ -289,15 +284,13 @@ func (c *Coordinator) CrashDetector() {
 		for _, task := range c.TaskMap {
 			// 如果任务在工作中且距离开始时间已经过去 10s -> 认为任务已经崩溃
 			if task.State == Working && time.Since(task.StartTime) > 10*time.Second {
-				fmt.Println("the task", task.TaskId, " is crash,take ", time.Since(task.StartTime).Seconds(), "s")
+				fmt.Println("[INFO] the task", task.TaskId, " is crash,take ", time.Since(task.StartTime).Seconds(), "s")
 				// 根据任务类型,将任务发送到不同的管道,将任务的状态设置为 Waiting,等待重新执行
 				switch task.TaskType {
 				case MapTask:
-					fmt.Println("send task to TaskChannelMap:", task)
 					task.State = Waiting
 					c.TaskChannelMap <- task
 				case ReduceTask:
-					fmt.Println("send task to TaskChannelReduce:", task)
 					task.State = Waiting
 					c.TaskChannelReduce <- task
 				}

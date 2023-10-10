@@ -55,12 +55,12 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 		case WaittingTask:
 			{
-				fmt.Println("All tasks are in progress, please wait...")
+				fmt.Println("[INFO] All tasks are in progress, please wait")
 				time.Sleep(time.Second)
 			}
 		case ExitTask:
 			{
-				fmt.Println("exit")
+				fmt.Println("[INFO] exit")
 				flag = false
 			}
 		}
@@ -73,10 +73,8 @@ func getTask() Task {
 	reqArgs := TaskArgs{}
 	replyTask := Task{}
 	ok := call("Coordinator.PollTask", &reqArgs, &replyTask)
-	if ok {
-		fmt.Println("replyTask: ", replyTask)
-	} else {
-		fmt.Printf("call failed!\n")
+	if !ok {
+		fmt.Printf("[ERROR] call failed\n")
 	}
 	return replyTask
 }
@@ -86,12 +84,12 @@ func DoMapTask(mapf func(string, string) []KeyValue, response *Task) {
 	filename := response.FileSlice[0]
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatalf("cannot open %v", filename)
+		log.Fatalf("[ERROR] cannot open %v", filename)
 	}
 	// 通过io工具包获取conten,作为mapf的参数
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", filename)
+		log.Fatalf("[ERROR] cannot read %v", filename)
 	}
 	file.Close()
 	// map返回一组KV结构体数组
@@ -123,7 +121,7 @@ func DoReduceTask(reducef func(string, []string) string, response *Task) {
 	dir, _ := os.Getwd()
 	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
 	if err != nil {
-		log.Fatal("Failed to create temp file", err)
+		log.Fatal("[ERROR] Failed to create temp file", err)
 	}
 	i := 0
 	for i < len(intermediate) {
@@ -193,7 +191,7 @@ func callDone(finishedTask *Task) Task {
 	ok := call("Coordinator.SetTaskDone", finishedTask, &reply)
 
 	if ok {
-		fmt.Println("callDone(): close task", finishedTask)
+		fmt.Println("[INFO] close task: ", finishedTask)
 	} else {
 		fmt.Printf("call failed!\n")
 	}
