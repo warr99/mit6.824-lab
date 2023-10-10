@@ -128,7 +128,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	c.makeMapTasks(files)
 	c.server()
-	// go c.CrashDetector()
+	go c.CrashDetector()
 	return &c
 }
 
@@ -200,7 +200,7 @@ func (c *Coordinator) checkTaskDone() bool {
 			if v.State == Done {
 				mapDoneNum++
 			} else {
-				mapDoneNum++
+				mapUnDoneNum++
 			}
 		} else if v.TaskType == ReduceTask {
 			if v.State == Done {

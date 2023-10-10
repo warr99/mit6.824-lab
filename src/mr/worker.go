@@ -121,7 +121,6 @@ func DoReduceTask(reducef func(string, []string) string, response *Task) {
 	reduceFileNum := response.TaskId
 	intermediate := shuffle(response.FileSlice)
 	dir, _ := os.Getwd()
-	//tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
 	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
 	if err != nil {
 		log.Fatal("Failed to create temp file", err)
