@@ -187,6 +187,66 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 当前节点crash
+	if rf.killed() {
+		reply.Term = -1
+		reply.VoteGranted = false
+		return
+	}
+	// 该竞选者已经过时
+	if args.Term < rf.currentTerm {
+		// 告诉该竞选者当前的 Term
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		// 重置自身的状态
+		rf.status = Follower
+		rf.currentTerm = args.Term
+		// 单有 args.Term > rf.currentTerm 还不能直接投票
+		rf.votedFor = -1
+	}
+	// 如果 args.Term > rf.currentTerm
+	if rf.votedFor == -1 {
+		currentLogIndex := len(rf.logs) - 1
+		currentLogTerm := 0
+		if currentLogIndex >= 0 {
+			currentLogTerm = rf.logs[currentLogIndex].Term
+		}
+		// 如果不能满足 args.LastLogIndex < currentLogIndex  args.LastLogTerm < currentLogTerm 任一条件，都不能投票
+		// 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
+		// Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
+		// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
+		if args.LastLogIndex < currentLogIndex || args.LastLogTerm < currentLogTerm {
+			// 拒绝投票
+			reply.VoteGranted = false
+			reply.Term = rf.currentTerm
+			return
+		}
+		// 满足所有条件，投票
+		rf.votedFor = args.CandidateId
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = true
+		// 重置 electionTimeout
+		rf.timer.Reset(rf.electionTimeout)
+		fmt.Printf("[	    func-RequestVote-rf(%v)		] : voted rf[%v]\n", rf.me, rf.votedFor)
+	} else {
+		// 如果 args.Term = rf.currentTerm
+		reply.VoteGranted = false
+		// 票已经给了同一轮选举的另外的竞争者
+		if rf.votedFor != args.CandidateId {
+			return
+		} else {
+			// 票已经给过当前发送请求的节点了
+			rf.status = Follower
+		}
+		rf.timer.Reset(rf.electionTimeout)
+	}
+
 }
 
 type AppendEntriesArgs struct {
