@@ -25,8 +25,9 @@ import (
 	"time"
 
 	//	"6.5840/labgob"
-	"6.5840/labrpc"
 	"fmt"
+
+	"6.5840/labrpc"
 )
 
 // 节点的角色
@@ -47,6 +48,15 @@ const (
 	Outdated                    // 竞选者过时（任期落后或者日落后）
 	Voted                       // 该节点的票已经投出去了
 	Normal                      // 投票，竞选者获得选票
+)
+
+type AppendEntriesStatus int
+
+const (
+	Killed              AppendEntriesStatus = iota // 节点clash
+	Expire                                         // 领导者任期落后
+	AppendEntriesNormal                            // 正常
+
 )
 
 // 日志条目
@@ -269,9 +279,31 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 // 处理心跳请求、同步日志RPC
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-
+	// 节点crash
+	if rf.killed() {
+		reply.AppendStatus = Killed
+		reply.Term = -1
+		reply.Success = false
+		return
+	}
+	// 心跳发起者的任期已经过时了
+	if args.PrevLogTerm < rf.currentTerm {
+		reply.AppendStatus = Expire
+		reply.Term = rf.currentTerm
+		reply.Success = false
+	}
+	// 重置 electionTimeout, 防止在 leader 没有出现异常的情况下开启新一轮的选举
+	rf.currentTerm = args.Term
+	rf.votedFor = args.LeaderId
+	rf.status = Follower
+	rf.timer.Reset(rf.electionTimeout)
+	reply.AppendStatus = AppendEntriesNormal
+	reply.Term = rf.currentTerm
+	reply.Success = true
 }
+
 type AppendEntriesArgs struct {
+	Term         int        // leader 任期
 	LeaderId     int        // 领导人id
 	PrevLogIndex int        // 紧邻新日志条目之前的那个日志条目的索引
 	PrevLogTerm  int        // 紧邻新日志条目之前的那个日志条目的任期
@@ -280,8 +312,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  // 当前任期，对于领导人而言 它会更新自己的任期
-	Success bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
+	Term         int  // 当前任期，对于领导人而言 它会更新自己的任期
+	Success      bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
+	AppendStatus AppendEntriesStatus
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -376,6 +409,29 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	for !ok {
+		if rf.killed() {
+			return false
+		}
+		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	switch reply.AppendStatus {
+	case Killed:
+		{
+			return false
+		}
+	case Expire:
+		{
+			rf.currentTerm = reply.Term
+			rf.status = Follower
+			rf.votedFor = -1
+			rf.timer.Reset(rf.electionTimeout)
+		}
+	case AppendEntriesNormal:
+		return true
+	}
 	return ok
 }
 
@@ -471,6 +527,7 @@ func (rf *Raft) ticker() {
 					continue
 				}
 				appendEntriesArgs := AppendEntriesArgs{
+					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
 					PrevLogIndex: 0, // 单纯的心跳不会产生日志
 					PrevLogTerm:  0,
