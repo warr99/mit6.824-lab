@@ -25,7 +25,7 @@ import (
 	"time"
 
 	//	"6.5840/labgob"
-	"fmt"
+	// "fmt"
 
 	"6.5840/labrpc"
 )
@@ -261,7 +261,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Replystatus = Normal
 		// 重置 electionTimeout
 		rf.timer.Reset(rf.electionTimeout)
-		fmt.Printf("[func-RequestVote-rf(%v)] voted rf[%v]\n", rf.me, rf.votedFor)
+		// fmt.Printf("[func-RequestVote-rf(%v)] voted rf[%v]\n", rf.me, rf.votedFor)
 	} else {
 		// 如果 args.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -345,7 +345,7 @@ type AppendEntriesReply struct {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, votedNums *int) bool {
-	fmt.Printf("[sendRequestVote-func-rf(%v)] send a voting request to %v\n", rf.me, server)
+	// fmt.Printf("[sendRequestVote-func-rf(%v)] send a voting request to %v\n", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	maxRetryTime := 5
 	retryTime := 0
@@ -359,7 +359,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		retryTime++
 		// 失败重传
 		time.Sleep(50 * 1000)
-		fmt.Printf("[sendRequestVote-func-rf(%v)] retry to send a voting request to %v\n", rf.me, server)
+		// fmt.Printf("[sendRequestVote-func-rf(%v)] retry to send a voting request to %v\n", rf.me, server)
 		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}
 	// 加锁
@@ -398,7 +398,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 						rf.nextIndex[i] = len(rf.logs) + 1
 					}
 					rf.timer.Reset(HeartBeatTimeout)
-					fmt.Printf("[sendRequestVote-func-rf(%v)] Reaching the majority and becoming the leader\n", rf.me)
+					// fmt.Printf("[sendRequestVote-func-rf(%v)] Reaching the majority and becoming the leader\n", rf.me)
 				}
 			}
 		}
@@ -514,7 +514,7 @@ func (rf *Raft) ticker() {
 					LastLogTerm:  0,
 				}
 				voteReply := RequestVoteReply{}
-				fmt.Printf("[ticker(%v)] send a voting request to %v\n", rf.me, i)
+				// fmt.Printf("[ticker(%v)] send a voting request to %v\n", rf.me, i)
 				go rf.sendRequestVote(i, &voteArgs, &voteReply, &votedNums)
 			}
 		// 当前为领导者，进行心跳/日志同步
@@ -535,7 +535,7 @@ func (rf *Raft) ticker() {
 					LeaderCommit: rf.commitIndex,
 				}
 				appendEntriesReply := AppendEntriesReply{}
-				fmt.Printf("[ticker(%v)] send a append entries to %v\n", rf.me, i)
+				// fmt.Printf("[ticker(%v)] send a append entries to %v\n", rf.me, i)
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply)
 			}
 		}
@@ -577,7 +577,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	fmt.Printf("[Make-func-rf(%v)] %v\n", rf.me, rf.electionTimeout)
+	// fmt.Printf("[Make-func-rf(%v)] %v\n", rf.me, rf.electionTimeout)
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
