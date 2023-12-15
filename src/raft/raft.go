@@ -39,6 +39,16 @@ const (
 	Leader                  // 领导者
 )
 
+// 投票响应的类型
+type VotedStatus int
+
+const (
+	Clash    VotedStatus = iota // 节点clash
+	Outdated                    // 竞选者过时（任期落后或者日落后）
+	Voted                       // 该节点的票已经投出去了
+	Normal                      // 投票，竞选者获得选票
+)
+
 // 日志条目
 type LogEntry struct {
 	Term    int         // 领导人接收到该条目时的任期（初始索引为1）
@@ -82,15 +92,18 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// 所有服务器上的持久性状态 (在响应 RPC 请求之前，已经更新到了稳定的存储设备)
+
 	currentTerm int        // 服务器已知最新的任期（在服务器首次启动时初始化为0，单调递增）
 	votedFor    int        // 当前任期内收到选票的 candidateId ，如果没有投给任何候选人则为空
 	logs        []LogEntry //日志条目；每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
 
 	// 所有服务器上的易失性状态
+
 	commitIndex int // 已知已提交的最高的日志条目的索引（初始值为0，单调递增）
 	lastApplied int // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 
 	// 领导人（服务器）上的易失性状态 (选举后已经重新初始化)
+
 	nextIndex  []int // 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导人最后的日志条目的索引+1）
 	matchIndex []int // 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 
@@ -180,8 +193,9 @@ type RequestVoteArgs struct {
 // 投票响应的结构体
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term        int  // 当前任期号，以便于候选人去更新自己的任期号
-	VoteGranted bool // 候选人赢得了此张选票时为真
+	Term        int         // 当前任期号，以便于候选人去更新自己的任期号
+	VoteGranted bool        // 候选人赢得了此张选票时为真
+	Replystatus VotedStatus // 投票状态枚举
 }
 
 // example RequestVote RPC handler.
@@ -193,6 +207,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.killed() {
 		reply.Term = -1
 		reply.VoteGranted = false
+		reply.Replystatus = Clash
 		return
 	}
 	// 该竞选者已经过时
@@ -200,6 +215,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 告诉该竞选者当前的 Term
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
+		reply.Replystatus = Outdated
 		return
 	}
 
@@ -225,18 +241,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			// 拒绝投票
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
+			reply.Replystatus = Outdated
 			return
 		}
 		// 满足所有条件，投票
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+		reply.Replystatus = Normal
 		// 重置 electionTimeout
 		rf.timer.Reset(rf.electionTimeout)
 		fmt.Printf("[func-RequestVote-rf(%v)] voted rf[%v]\n", rf.me, rf.votedFor)
 	} else {
 		// 如果 args.Term = rf.currentTerm
 		reply.VoteGranted = false
+		reply.Replystatus = Voted
 		// 票已经给了同一轮选举的另外的竞争者
 		if rf.votedFor != args.CandidateId {
 			return
@@ -246,9 +265,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 		rf.timer.Reset(rf.electionTimeout)
 	}
-
 }
 
+// 处理心跳请求、同步日志RPC
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
+}
 type AppendEntriesArgs struct {
 	LeaderId     int        // 领导人id
 	PrevLogIndex int        // 紧邻新日志条目之前的那个日志条目的索引
@@ -289,13 +311,71 @@ type AppendEntriesReply struct {
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, votedNums *int) bool {
+	fmt.Printf("[sendRequestVote-func-rf(%v)] send a voting request to %v\n", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	maxRetryTime := 5
+	retryTime := 0
+	for !ok {
+		if rf.killed() {
+			ok = false
+		}
+		if retryTime >= maxRetryTime {
+			ok = false
+		}
+		retryTime++
+		// 失败重传
+		time.Sleep(50 * 1000)
+		fmt.Printf("[sendRequestVote-func-rf(%v)] retry to send a voting request to %v\n", rf.me, server)
+		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
+	}
+	// 加锁
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	switch reply.Replystatus {
+	// 接收请求的节点 clash
+	case Clash:
+		{
+			ok = false
+		}
+	// 当前竞选者过期了
+	case Outdated:
+		{
+			rf.status = Follower
+			rf.timer.Reset(rf.electionTimeout)
+			if rf.currentTerm < reply.Term {
+				rf.currentTerm = reply.Term
+			}
+		}
+	// 正常的选举（获得选票/请求的节点已经把票给出去了）
+	case Voted, Normal:
+		{
+			if reply.VoteGranted && *votedNums <= (len(rf.peers)/2) {
+				*votedNums++
+			}
+			// 如果选票达到多数派
+			if *votedNums >= (len(rf.peers)/2)+1 {
+				*votedNums = 0
+				// 本身不是leader，改变状态，初始化 nextIndex[]
+				if rf.status != Leader {
+					rf.status = Leader
+					rf.nextIndex = make([]int, len(rf.peers))
+					for i, _ := range rf.nextIndex {
+						rf.nextIndex[i] = len(rf.logs) + 1
+					}
+					rf.timer.Reset(HeartBeatTimeout)
+					fmt.Printf("[sendRequestVote-func-rf(%v)] Reaching the majority and becoming the leader\n", rf.me)
+				}
+			}
+		}
+	}
+	// 如果没有获得选票
 	return ok
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -362,7 +442,7 @@ func (rf *Raft) ticker() {
 			// 投票给自己
 			rf.votedFor = rf.me
 			// 收到的选票数
-			// votedNums := 1
+			votedNums := 1
 			// 开启新的选举任期
 			rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
 			rf.timer.Reset(rf.electionTimeout)
@@ -379,7 +459,7 @@ func (rf *Raft) ticker() {
 				}
 				voteReply := RequestVoteReply{}
 				fmt.Printf("[ticker(%v)] send a voting request to %v\n", rf.me, i)
-				go rf.sendRequestVote(i, &voteArgs, &voteReply)
+				go rf.sendRequestVote(i, &voteArgs, &voteReply, &votedNums)
 			}
 		// 当前为领导者，进行心跳/日志同步
 		case Leader:
