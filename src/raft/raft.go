@@ -233,7 +233,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		// 重置 electionTimeout
 		rf.timer.Reset(rf.electionTimeout)
-		fmt.Printf("[	    func-RequestVote-rf(%v)		] : voted rf[%v]\n", rf.me, rf.votedFor)
+		fmt.Printf("[func-RequestVote-rf(%v)] voted rf[%v]\n", rf.me, rf.votedFor)
 	} else {
 		// 如果 args.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -378,7 +378,7 @@ func (rf *Raft) ticker() {
 					LastLogTerm:  0,
 				}
 				voteReply := RequestVoteReply{}
-				fmt.Printf("[	ticker(%v) ] : send a voting request to %v\n", rf.me, i)
+				fmt.Printf("[ticker(%v)] send a voting request to %v\n", rf.me, i)
 				go rf.sendRequestVote(i, &voteArgs, &voteReply)
 			}
 		// 当前为领导者，进行心跳/日志同步
@@ -398,7 +398,7 @@ func (rf *Raft) ticker() {
 					LeaderCommit: rf.commitIndex,
 				}
 				appendEntriesReply := AppendEntriesReply{}
-				fmt.Printf("[	ticker(%v) ] : send a append entries to %v\n", rf.me, i)
+				fmt.Printf("[ticker(%v)] send a append entries to %v\n", rf.me, i)
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply)
 			}
 		}
@@ -440,7 +440,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	fmt.Printf("[ 	Make-func-rf(%v) 	]:  %v\n", rf.me, rf.electionTimeout)
+	fmt.Printf("[Make-func-rf(%v)] %v\n", rf.me, rf.electionTimeout)
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
