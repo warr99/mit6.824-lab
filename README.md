@@ -7,3 +7,8 @@
   * 相关文档:
     * MapReduce 总结: https://juejin.cn/post/7282603229623320637
     * 实现思路: https://juejin.cn/post/7288963208395096122
+* lab2A
+  * 相关 commit: https://github.com/warr99/mit6.824-lab/commit/f8054613cd0610cb88ea7239af51f2c7977c5109
+  * 相关文档:
+    * Raft 选举总结: https://juejin.cn/post/7313242001113333798
+    * 实现思路: https://juejin.cn/post/7313242113436287014
