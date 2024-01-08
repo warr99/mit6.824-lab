@@ -554,6 +554,13 @@ func (rf *Raft) ticker() {
 				appendEntriesReply := AppendEntriesReply{}
 				// fmt.Printf("[ticker(%v)] send a append entries to %v\n", rf.me, i)
 				// TODO 是否有日志需要同步，跟着心跳一起发送
+				appendEntriesArgs.Entries = rf.logs[rf.nextIndex[i]-1:]
+				if rf.nextIndex[i] > 0 {
+					appendEntriesArgs.PrevLogIndex = rf.nextIndex[i] - 1
+				}
+				if appendEntriesArgs.PrevLogIndex > 0 {
+					appendEntriesArgs.PrevLogTerm = rf.logs[appendEntriesArgs.PrevLogIndex].Term
+				}
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply)
 			}
 		}
