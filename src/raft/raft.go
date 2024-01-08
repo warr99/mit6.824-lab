@@ -454,6 +454,23 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 
+	if rf.killed() {
+		return index, term, false
+	}
+	// 初始化日志条目，追加
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.status != Leader {
+		return index, term, false
+	}
+	// 初始化日志条目
+	apppendLog := LogEntry{
+		Term:    rf.currentTerm,
+		Command: command,
+	}
+	// 追加
+	rf.logs = append(rf.logs, apppendLog)
+
 	return index, term, isLeader
 }
 
@@ -536,6 +553,7 @@ func (rf *Raft) ticker() {
 				}
 				appendEntriesReply := AppendEntriesReply{}
 				// fmt.Printf("[ticker(%v)] send a append entries to %v\n", rf.me, i)
+				// TODO 是否有日志需要同步，跟着心跳一起发送
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply)
 			}
 		}
