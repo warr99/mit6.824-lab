@@ -350,7 +350,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 追加日志
 	if args.Entries != nil {
-		PrintfLog("[	AppendEntries func-rf(%v)	] follower append log, log: %v \n", rf.me, args.Entries)
+		PrintfLog("[	AppendEntries func-rf(%v)	] follower append log, reply.AppendStatus: %v \n", rf.me, args.Entries)
 		// 截断 PrevLogIndex 之前的日志（经过上面的一致性检查之后，Follower 和 Leader 在 PrevLogIndex 之前的日志一定是一致的）
 		rf.logs = rf.logs[:args.PrevLogIndex]
 		rf.logs = append(rf.logs, args.Entries...)
@@ -650,8 +650,8 @@ func (rf *Raft) ticker() {
 					LastLogIndex: len(rf.logs) - 1,
 					LastLogTerm:  0,
 				}
-				if len(rf.logs) - 1 != -1 {
-					voteArgs.LastLogTerm = rf.logs[len(rf.logs) - 1].Term
+				if len(rf.logs)-1 != -1 {
+					voteArgs.LastLogTerm = rf.logs[len(rf.logs)-1].Term
 				}
 				voteReply := RequestVoteReply{}
 				PrintfLog("[              ticker(%v)                ] send a voting request to %v\n", rf.me, i)
@@ -661,6 +661,7 @@ func (rf *Raft) ticker() {
 		case Leader:
 			// 重置心跳
 			rf.timer.Reset(HeartBeatTimeout)
+			appendNums := 1 // 对于正确返回的节点数量
 			// 构造心跳请求
 			for i := 0; i < len(rf.peers); i++ {
 				if i == rf.me {
@@ -683,7 +684,6 @@ func (rf *Raft) ticker() {
 				if appendEntriesArgs.PrevLogIndex > 0 {
 					appendEntriesArgs.PrevLogTerm = rf.logs[appendEntriesArgs.PrevLogIndex-1].Term
 				}
-				appendNums := 1 // 对于正确返回的节点数量
 				PrintfLog("[              ticker(%v)                ] send a append entries to %v, append entries args: %v\n", rf.me, i, appendEntriesArgs)
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply, &appendNums)
 			}
