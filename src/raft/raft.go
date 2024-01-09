@@ -256,6 +256,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
 			reply.Replystatus = Outdated
+			fmt.Printf("[      	  func-RequestVote-rf(%v)        ] refuse voted for rf[%v], args.LastLogIndex: %v, currentLogIndex: %v, args.LastLogTerm:%v, currentLogTerm: %v. Outdated\n",
+				rf.me,
+				args.CandidateId,
+				args.LastLogIndex,
+				currentLogIndex,
+				args.LastLogTerm,
+				currentLogTerm)
 			return
 		}
 		// 满足所有条件，投票
@@ -265,7 +272,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Replystatus = Normal
 		// 重置 electionTimeout
 		rf.timer.Reset(rf.electionTimeout)
-		// fmt.Printf("[func-RequestVote-rf(%v)] voted rf[%v]\n", rf.me, rf.votedFor)
+		fmt.Printf("[      	  func-RequestVote-rf(%v)        ] voted for rf[%v]\n", rf.me, rf.votedFor)
 	} else {
 		// 如果 args.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -419,7 +426,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		retryTime++
 		// 失败重传
 		time.Sleep(50 * 1000)
-		// fmt.Printf("[sendRequestVote-func-rf(%v)] retry to send a voting request to %v\n", rf.me, server)
+		fmt.Printf("[        sendRequestVote-func-rf(%v)     ] retry to send a voting request to %v\n", rf.me, server)
 		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}
 	// 加锁
@@ -640,8 +647,11 @@ func (rf *Raft) ticker() {
 					LastLogIndex: len(rf.logs) - 1,
 					LastLogTerm:  0,
 				}
+				if len(rf.logs) - 1 != -1 {
+					voteArgs.LastLogTerm = rf.logs[len(rf.logs) - 1].Term
+				}
 				voteReply := RequestVoteReply{}
-				// fmt.Printf("[ticker(%v)] send a voting request to %v\n", rf.me, i)
+				fmt.Printf("[              ticker(%v)                ] send a voting request to %v\n", rf.me, i)
 				go rf.sendRequestVote(i, &voteArgs, &voteReply, &votedNums)
 			}
 		// 当前为领导者，进行心跳/日志同步
