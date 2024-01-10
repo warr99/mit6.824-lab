@@ -260,7 +260,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
 		// Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
 		// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
-		if args.LastLogIndex < currentLogIndex || args.LastLogTerm < currentLogTerm {
+		if args.LastLogTerm < currentLogTerm || (args.LastLogIndex < currentLogIndex && args.LastLogTerm <= currentLogTerm) {
 			// 拒绝投票
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
