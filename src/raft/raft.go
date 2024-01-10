@@ -44,7 +44,7 @@ type Status int
 
 // 节点角色枚举
 const (
-	Follower  Status = iota // 跟随着
+	Follower  Status = iota // 跟随者
 	Candidate               // 竞争者
 	Leader                  // 领导者
 )
@@ -260,7 +260,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
 		// Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
 		// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
-		if args.LastLogTerm < currentLogTerm || (args.LastLogIndex < currentLogIndex && args.LastLogTerm <= currentLogTerm) {
+		if args.LastLogTerm < currentLogTerm || (len(rf.logs) > 0 && args.LastLogIndex < currentLogIndex && args.LastLogTerm <= currentLogTerm) {
 			// 拒绝投票
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
@@ -350,7 +350,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 追加日志
 	if args.Entries != nil {
-		PrintfLog("[	AppendEntries func-rf(%v)	] follower append log, reply.AppendStatus: %v \n", rf.me, args.Entries)
+		PrintfLog("[	 AppendEntries func-rf(%v)  	] follower append log, log count: %v \n", rf.me, len(args.Entries))
 		// 截断 PrevLogIndex 之前的日志（经过上面的一致性检查之后，Follower 和 Leader 在 PrevLogIndex 之前的日志一定是一致的）
 		rf.logs = rf.logs[:args.PrevLogIndex]
 		rf.logs = append(rf.logs, args.Entries...)
@@ -543,9 +543,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					}
 					rf.applyChan <- applyMsg
 					rf.commitIndex = rf.lastApplied
-					PrintfLog("[	sendAppendEntries func-rf(%v)	] leader commit log, rf.log: %+v, rf.lastApplied: %v\n",
+					PrintfLog("[	sendAppendEntries func-rf(%v)	] leader commit log, rf.lastApplied: %v\n",
 						rf.me,
-						rf.logs,
 						rf.lastApplied)
 				}
 			}
@@ -587,7 +586,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	}
 	// 追加
-	PrintfLog("[           Start-func-rf(%v)            ] leader append log, log: %v\n", rf.me, command)
+	PrintfLog("[           Start-func-rf(%v)            ] leader append log, command: %v\n", rf.me, command)
 	rf.logs = append(rf.logs, apppendLog)
 	index = len(rf.logs)
 	term = rf.currentTerm
@@ -684,7 +683,7 @@ func (rf *Raft) ticker() {
 				if appendEntriesArgs.PrevLogIndex > 0 {
 					appendEntriesArgs.PrevLogTerm = rf.logs[appendEntriesArgs.PrevLogIndex-1].Term
 				}
-				PrintfLog("[              ticker(%v)                ] send a append entries to %v, append entries args: %v\n", rf.me, i, appendEntriesArgs)
+				PrintfLog("[             ticker(%v)                 ] send a append entries to %v, append log count: %v\n", rf.me, i, len(appendEntriesArgs.Entries))
 				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply, &appendNums)
 			}
 		}
