@@ -251,16 +251,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	// 如果 args.Term > rf.currentTerm
 	if rf.votedFor == -1 {
-		currentLogIndex := len(rf.logs) - 1
+		currentLogIndex := len(rf.logs)
 		currentLogTerm := 0
-		if currentLogIndex >= 0 {
-			currentLogTerm = rf.logs[currentLogIndex].Term
+		if len(rf.logs) > 0 {
+			currentLogTerm = rf.logs[len(rf.logs)-1].Term
 		}
 		// 如果不能满足 args.LastLogIndex < currentLogIndex  args.LastLogTerm < currentLogTerm 任一条件，都不能投票
 		// 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
 		// Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
 		// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
-		if args.LastLogTerm < currentLogTerm || (len(rf.logs) > 0 && args.LastLogIndex < currentLogIndex && args.LastLogTerm <= currentLogTerm) {
+		if args.LastLogTerm < currentLogTerm || (len(rf.logs) > 0 && args.LastLogTerm == currentLogTerm && args.LastLogIndex < currentLogIndex) {
 			// 拒绝投票
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
@@ -334,7 +334,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		reply.UpNextIndex = rf.lastApplied + 1
-		PrintfLog("[	AppendEntries func-rf(%v)	] reply.AppendStatus: Applied, rf.lastApplied: %v, args.PrevLogIndex: %v\n",
+		PrintfLog("[	    AppendEntries func-rf(%v)  	     ] reply.AppendStatus: Applied, rf.lastApplied: %v, args.PrevLogIndex: %v\n",
 			rf.me, rf.lastApplied, args.PrevLogIndex)
 		return
 	}
@@ -350,7 +350,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 追加日志
 	if args.Entries != nil {
-		PrintfLog("[	 AppendEntries func-rf(%v)  	] follower append log, log count: %v \n", rf.me, len(args.Entries))
+		PrintfLog("[	    AppendEntries func-rf(%v)  	    ] follower append log, log count: %v \n", rf.me, len(args.Entries))
 		// 截断 PrevLogIndex 之前的日志（经过上面的一致性检查之后，Follower 和 Leader 在 PrevLogIndex 之前的日志一定是一致的）
 		rf.logs = rf.logs[:args.PrevLogIndex]
 		rf.logs = append(rf.logs, args.Entries...)
@@ -365,7 +365,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.applyChan <- applyMsg
 		rf.commitIndex = rf.lastApplied
-		PrintfLog("[	AppendEntries func-rf(%v)	] follower commit log, commitIndex: %v\n",
+		PrintfLog("[	    AppendEntries func-rf(%v)  	    ] follower commit log, commitIndex: %v\n",
+
 			rf.me,
 			rf.commitIndex)
 	}
@@ -505,7 +506,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				return
 			}
 			rf.nextIndex[server] = reply.UpNextIndex
-			PrintfLog("[	sendAppendEntries func-rf(%v)	] leader handle LogMismatch, rf.nextIndex[server]: %v\n",
+			PrintfLog("[	 sendAppendEntries func-rf(%v)	    ]  leader handle LogMismatch, rf.nextIndex[server]: %v\n",
 				rf.me,
 				reply.UpNextIndex)
 		}
@@ -515,7 +516,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				return
 			}
 			rf.nextIndex[server] = reply.UpNextIndex
-			PrintfLog("[	sendAppendEntries func-rf(%v)	] leader handle Applied, rf.nextIndex[server]: %v\n",
+			PrintfLog("[     sendAppendEntries func-rf(%v)	    ] leader handle Applied, rf.nextIndex[server]: %v\n",
 				rf.me,
 				reply.UpNextIndex)
 		}
@@ -543,7 +544,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					}
 					rf.applyChan <- applyMsg
 					rf.commitIndex = rf.lastApplied
-					PrintfLog("[	sendAppendEntries func-rf(%v)	] leader commit log, rf.lastApplied: %v\n",
+					PrintfLog("[	  sendAppendEntries func-rf(%v)	    ] leader commit log, rf.lastApplied: %v\n",
 						rf.me,
 						rf.lastApplied)
 				}
@@ -646,10 +647,10 @@ func (rf *Raft) ticker() {
 				voteArgs := RequestVoteArgs{
 					Term:         rf.currentTerm,
 					CandidateId:  rf.me,
-					LastLogIndex: len(rf.logs) - 1,
+					LastLogIndex: len(rf.logs),
 					LastLogTerm:  0,
 				}
-				if len(rf.logs)-1 != -1 {
+				if len(rf.logs) > 0 {
 					voteArgs.LastLogTerm = rf.logs[len(rf.logs)-1].Term
 				}
 				voteReply := RequestVoteReply{}
