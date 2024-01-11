@@ -30,7 +30,7 @@ import (
 	"6.5840/labrpc"
 )
 
-var logEnabled = true
+var logEnabled = false
 
 // Printf 封装 PrintfLog，根据 logEnabled 控制是否输出日志
 func PrintfLog(format string, a ...interface{}) {
@@ -684,14 +684,11 @@ func (rf *Raft) ticker() {
 					LeaderCommit: rf.commitIndex,
 				}
 				appendEntriesReply := AppendEntriesReply{}
-				if rf.nextIndex[i]-1 < len(rf.logs) {
-					// 是否有日志需要同步，跟着心跳一起发送
-					appendEntriesArgs.Entries = rf.logs[rf.nextIndex[i]-1:]
-					if rf.nextIndex[i] > 0 {
-						appendEntriesArgs.PrevLogIndex = rf.nextIndex[i] - 1
-					}
+				// 是否有日志需要同步，跟着心跳一起发送
+				appendEntriesArgs.Entries = rf.logs[rf.nextIndex[i]-1:]
+				if rf.nextIndex[i] > 0 {
+					appendEntriesArgs.PrevLogIndex = rf.nextIndex[i] - 1
 				}
-
 				if appendEntriesArgs.PrevLogIndex > 0 {
 					appendEntriesArgs.PrevLogTerm = rf.logs[appendEntriesArgs.PrevLogIndex-1].Term
 				}
