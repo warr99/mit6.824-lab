@@ -30,21 +30,6 @@ import (
 	"6.5840/labrpc"
 )
 
-// var logEnabled = false
-
-// // Printf 封装 PrintfLog，根据 logEnabled 控制是否输出日志
-// func PrintfLog(format string, a ...interface{}) {
-// 	if logEnabled {
-// 		fmt.Printf(format, a...)
-// 	}
-// }
-
-// func currTime() string {
-// 	currentTime := time.Now()
-// 	formattedTime := currentTime.Format("2006-01-02 15:04:05.000")
-// 	return formattedTime
-// }
-
 // 节点的角色
 type Status int
 
@@ -262,11 +247,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			lastLogTerm = rf.logs[len(rf.logs)-1].Term
 		}
 
-		//  If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
-		// 论文里的第二个匹配条件，当前peer要符合arg两个参数的预期*
-		// 这里是一个重点，卡这里导致 lab2b rejoin of partitioned leader/ backs up没pass
-		// 1、args.LastLogTerm < lastLogTerm是因为选举时应该首先看term，只要term大的，才代表存活在raft中越久
-		// 2、判断日志的最后一个index是否是最新的前提应该是要在这两个节点任期是否是相同的情况下，判断哪个数据更完整。
+		// 如果不能满足 args.LastLogIndex < currentLogIndex  args.LastLogTerm < currentLogTerm 任一条件，都不能投票
+		// 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
+		// Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
+		// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
 		if args.LastLogTerm < lastLogTerm || (len(rf.logs) > 0 && args.LastLogTerm == rf.logs[len(rf.logs)-1].Term && args.LastLogIndex < len(rf.logs)) {
 
 			reply.Replystatus = Outdated
@@ -287,38 +271,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		rf.timer.Reset(rf.electionTimeout)
 		Debug(dVote, "S%d voted for S%d\n", rf.me, rf.votedFor)
-		// ---------------
-		// currentLogIndex := len(rf.logs)
-		// currentLogTerm := 0
-		// if len(rf.logs) > 0 {
-		// 	currentLogTerm = rf.logs[len(rf.logs)-1].Term
-		// }
-		// // 如果不能满足 args.LastLogIndex < currentLogIndex  args.LastLogTerm < currentLogTerm 任一条件，都不能投票
-		// // 请求投票（RequestVote） RPC 实现了这样的限制：RPC 中包含了候选人的日志信息，然后投票人会拒绝掉那些日志没有自己新的投票请求。
-		// // Raft 通过比较两份日志中最后一条日志条目的索引值和任期号定义谁的日志比较新。如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新。\
-		// // 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新。
-		// if args.LastLogTerm < currentLogTerm || (len(rf.logs) > 0 && args.LastLogTerm == currentLogTerm && args.LastLogIndex < currentLogIndex) {
-		// 	// 拒绝投票
-		// 	reply.VoteGranted = false
-		// 	reply.Term = rf.currentTerm
-		// 	reply.Replystatus = Outdated
-		// 	Debug(dVote, "S%d refuse voted for S%d, args.LastLogIndex: %v, currentLogIndex: %v, args.LastLogTerm:%v, currentLogTerm: %v. Outdated",
-		// 		rf.me,
-		// 		args.CandidateId,
-		// 		args.LastLogIndex,
-		// 		currentLogIndex,
-		// 		args.LastLogTerm,
-		// 		currentLogTerm)
-		// 	return
-		// }
-		// // 满足所有条件，投票
-		// rf.votedFor = args.CandidateId
-		// reply.Term = rf.currentTerm
-		// reply.VoteGranted = true
-		// reply.Replystatus = Normal
-		// // 重置 electionTimeout
-		// rf.timer.Reset(rf.electionTimeout)
-		// Debug(dVote, "S%d voted for S%d\n", rf.me, rf.votedFor)
 	} else {
 		// 如果 args.Term = rf.currentTerm
 		reply.VoteGranted = false
