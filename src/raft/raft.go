@@ -24,11 +24,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/labgob"
 	// "fmt"
 	"6.5840/labrpc"
 	"bytes"
-	"labgob"
 )
 
 // 节点的角色
@@ -181,15 +180,21 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	// Gob 解码器
 	d := labgob.NewDecoder(r)
-	if err := d.Decode(&rf.currentTerm); err != nil {
+	var currentTerm int
+	var votedFor int
+	var logs []LogEntry
+	if err := d.Decode(&currentTerm); err != nil {
 		Debug(dError, "Raft.readPersist: failed to decode \"rf.currentTerm\". err: %v, data: %s", err, data)
 	}
-	if err := d.Decode(&rf.votedFor); err != nil {
+	if err := d.Decode(&votedFor); err != nil {
 		Debug(dError, "Raft.readPersist: failed to decode \"rf.votedFor\". err: %v, data: %s", err, data)
 	}
-	if err := d.Decode(&rf.logs); err != nil {
+	if err := d.Decode(&logs); err != nil {
 		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %s", err, data)
 	}
+	rf.currentTerm = currentTerm
+	rf.logs = logs
+	rf.votedFor = votedFor
 }
 
 // the service says it has created a snapshot that has
@@ -249,6 +254,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		// 单有 args.Term > rf.currentTerm 还不能直接投票
 		rf.votedFor = -1
+		rf.persist()
 	}
 	// 如果 args.Term > rf.currentTerm
 	if rf.votedFor == -1 {
@@ -274,7 +280,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		// 给票数，并且返回true
 		rf.votedFor = args.CandidateId
-
+		rf.persist()
 		reply.Replystatus = Normal
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
@@ -346,6 +352,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 	rf.votedFor = args.LeaderId
 	rf.status = Follower
+	rf.persist()
 
 	Debug(dTimer, "S%d reset electionTimeout", rf.me)
 
@@ -359,6 +366,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		Debug(dLog, "S%d follower append log, append log count: %d \n", rf.me, len(args.Entries))
 		rf.logs = rf.logs[:args.PrevLogIndex]
 		rf.logs = append(rf.logs, args.Entries...)
+		rf.persist()
 	}
 
 	for rf.lastApplied < args.LeaderCommit {
@@ -450,6 +458,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			if rf.currentTerm < reply.Term {
 				rf.currentTerm = reply.Term
 				rf.votedFor = -1
+				rf.persist()
 			}
 		}
 	// 正常的选举（获得选票/请求的节点已经把票给出去了）
@@ -526,28 +535,25 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				}
 			}
 		}
-	case LogMismatch:
-		{
-			if args.Term != rf.currentTerm {
-				return
-			}
-			rf.nextIndex[server] = reply.UpNextIndex
-			Debug(dLog, "S%d leader handle LogMismatch\n", rf.me)
-		}
 	case Expire:
 		{
 			rf.currentTerm = reply.Term
 			rf.status = Follower
 			rf.votedFor = -1
 			rf.timer.Reset(rf.electionTimeout)
+			rf.persist()
 		}
-	case Applied:
+	case Applied, LogMismatch:
 		{
-			if args.Term != rf.currentTerm {
-				return
+			if reply.Term > rf.currentTerm {
+				rf.status = Follower
+				rf.votedFor = -1
+				rf.timer.Reset(rf.electionTimeout)
+				rf.currentTerm = reply.Term
+				rf.persist()
 			}
 			rf.nextIndex[server] = reply.UpNextIndex
-			Debug(dLog, "S%d leader handle Applied\n", rf.me)
+			Debug(dLog, "S%d leader handle Applied/LogMismatch\n", rf.me)
 		}
 	}
 }
@@ -583,6 +589,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	appendLog := LogEntry{Term: rf.currentTerm, Command: command}
 	Debug(dLog, "S%d leader append log, command:%v\n", rf.me, command)
 	rf.logs = append(rf.logs, appendLog)
+	rf.persist()
 	index = len(rf.logs)
 	term = rf.currentTerm
 	return index, term, isLeader
@@ -635,6 +642,7 @@ func (rf *Raft) ticker() {
 			votedNums := 1
 			// 开启新的选举任期
 			rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
+			rf.persist()
 			rf.timer.Reset(rf.electionTimeout)
 			// 并行地向集群中的其他服务器节点发送请求投票的 RPCs 来给自己投票
 			for i := 0; i < len(rf.peers); i++ {
