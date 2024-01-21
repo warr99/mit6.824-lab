@@ -26,8 +26,9 @@ import (
 
 	//	"6.5840/labgob"
 	// "fmt"
-
 	"6.5840/labrpc"
+	"bytes"
+	"labgob"
 )
 
 // 节点的角色
@@ -152,14 +153,22 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
+	Debug(dPersist, "S%d saving Raft's persistent state to stable storage at T%d.", rf.me, rf.currentTerm)
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(rf.currentTerm); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.currentTerm\". err: %v, data: %v", err, rf.currentTerm)
+	}
+	if err := e.Encode(rf.votedFor); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.votedFor\". err: %v, data: %v", err, rf.votedFor)
+	}
+	if err := e.Encode(rf.logs); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %v", err, rf.logs)
+	}
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 // restore previously persisted state.
@@ -168,18 +177,19 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	// 字节缓冲区
+	r := bytes.NewBuffer(data)
+	// Gob 解码器
+	d := labgob.NewDecoder(r)
+	if err := d.Decode(&rf.currentTerm); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.currentTerm\". err: %v, data: %s", err, data)
+	}
+	if err := d.Decode(&rf.votedFor); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.votedFor\". err: %v, data: %s", err, data)
+	}
+	if err := d.Decode(&rf.logs); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %s", err, data)
+	}
 }
 
 // the service says it has created a snapshot that has
