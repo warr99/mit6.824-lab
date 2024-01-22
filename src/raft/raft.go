@@ -451,11 +451,11 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term         int  // 当前任期，对于领导人而言 它会更新自己的任期
-	Success      bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
-	XTerm        int // term in the conflicting entry (if any)
-	XIndex       int // index of first entry with that term (if any)
-	XLen         int // log length
+	Term    int  // 当前任期，对于领导人而言 它会更新自己的任期
+	Success bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
+	XTerm   int  // term in the conflicting entry (if any)
+	XIndex  int  // index of first entry with that term (if any)
+	XLen    int  // log length
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -548,17 +548,24 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply, appendNums *int) {
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	var ok = false
 	if rf.killed() {
-		return
+		return ok
 	}
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	for !ok {
 		if rf.killed() {
-			return
+			return ok
 		}
 		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	}
+	return ok
+}
+
+func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
+	reply := &AppendEntriesReply{}
+	ok := rf.sendAppendEntries(server, args, reply)
 	if ok {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
@@ -619,6 +626,57 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 					rf.nextIndex[server] = reply.XIndex
 				}
 			}
+			lastLogIndex, _ := rf.logs.lastLogInfo()
+			nextIndex := rf.nextIndex[server]
+			if lastLogIndex >= nextIndex {
+				Debug(dLog, "S%d <- S%d Inconsistent logs, retrying.", rf.me, server)
+				entries := make([]LogEntry, lastLogIndex-nextIndex+1)
+				copy(entries, rf.logs.getSlice(nextIndex, lastLogIndex+1))
+				newArg := &AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: nextIndex - 1,
+					PrevLogTerm:  rf.logs.getEntry(nextIndex - 1).Term,
+					Entries:      entries,
+				}
+				go rf.leaderSendEntries(newArg, server)
+			}
+		}
+	}
+}
+
+func (rf *Raft) sendEntries(isHeartbeat bool) {
+	Debug(dTimer, "S%d Resetting HBT, wait for next heartbeat broadcast.", rf.me)
+	rf.timer.Reset(HeartBeatTimeout)
+	lastLogIndex, _ := rf.logs.lastLogInfo()
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		nextIndex := rf.nextIndex[peer]
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: nextIndex - 1,
+			PrevLogTerm:  rf.logs.getEntry(nextIndex - 1).Term,
+			LeaderCommit: rf.commitIndex,
+		}
+		if lastLogIndex >= nextIndex {
+			// If last log index ≥ nextIndex for a follower:
+			// send AppendEntries RPC with log entries starting at nextIndex
+			entries := make([]LogEntry, lastLogIndex-nextIndex+1)
+			copy(entries, rf.logs.getSlice(nextIndex, lastLogIndex+1))
+			args.Entries = entries
+			Debug(dLog, "S%d -> S%d Sending append entries at T%d. PLI: %d, PLT: %d, LC: %d. Entries: %v.",
+				rf.me, peer, rf.currentTerm, args.PrevLogIndex,
+				args.PrevLogTerm, args.LeaderCommit, args.Entries,
+			)
+			go rf.leaderSendEntries(args, peer)
+		} else if isHeartbeat {
+			args.Entries = make([]LogEntry, 0)
+			Debug(dLog, "S%d -> S%d Sending heartbeat at T%d. PLI: %d, PLT: %d, LC: %d.",
+				rf.me, peer, rf.currentTerm, args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit)
+			go rf.leaderSendEntries(args, peer)
 		}
 	}
 }
@@ -728,35 +786,8 @@ func (rf *Raft) ticker() {
 			}
 		// 当前为领导者，进行心跳/日志同步
 		case Leader:
-			// 重置心跳
-			Debug(dTimer, "S%d leader reset HeartBeatTimeout\n", rf.me)
-			rf.timer.Reset(HeartBeatTimeout)
-			appendNums := 1 // 对于正确返回的节点数量
-			// 构造心跳请求
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					continue
-				}
-				appendEntriesArgs := AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderId:     rf.me,
-					PrevLogIndex: 0, // 单纯的心跳不会产生日志
-					PrevLogTerm:  0,
-					Entries:      nil,
-					LeaderCommit: rf.commitIndex,
-				}
-				appendEntriesReply := AppendEntriesReply{}
-				// 是否有日志需要同步，跟着心跳一起发送
-				appendEntriesArgs.Entries = rf.logs[rf.nextIndex[i]-1:]
-				if rf.nextIndex[i] > 0 {
-					appendEntriesArgs.PrevLogIndex = rf.nextIndex[i] - 1
-				}
-				if appendEntriesArgs.PrevLogIndex > 0 {
-					appendEntriesArgs.PrevLogTerm = rf.logs.getEntry(rf.nextIndex[i] - 1).Term
-				}
-				Debug(dCommit, "S%d send a append entries to S%d, append log count: %v\n", rf.me, i, len(appendEntriesArgs.Entries))
-				go rf.sendAppendEntries(i, &appendEntriesArgs, &appendEntriesReply, &appendNums)
-			}
+			Debug(dTimer, "S%d HBT elapsed. Broadcast heartbeats.", rf.me)
+			rf.sendEntries(true)
 		}
 		rf.mu.Unlock()
 	}
