@@ -410,17 +410,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 返回假 如果接收者日志中没有包含这样一个条目 即该条目的任期在 prevLogIndex 上能和 prevLogTerm 匹配上
 	if args.PrevLogTerm == -1 || args.PrevLogTerm != rf.logs.getEntry(args.PrevLogIndex).Term {
 		Debug(dLog2, "S%d Prev log entries do not match. Ask leader to retry.", rf.me)
+		// 当前节点的日志长度
 		reply.XLen = len(rf.logs)
+		// 为前一个日志条目的任期
 		reply.XTerm = rf.logs.getEntry(args.PrevLogIndex).Term
+		// 具有相同任期的日志条目的最小索引(若找不到相同任期,为-1)
 		reply.XIndex, _ = rf.logs.getBoundsWithTerm(reply.XTerm)
 		return
 	}
 	// 如果一个已经存在的条目和新条目发生了冲突（因为索引相同，任期不同），
 	// 那么就删除这个已经存在的条目以及它之后的所有条目
+	// 遍历领导者发送的新的日志条目
 	for i, entry := range args.Entries {
+		// 检查新的日志条目与已有日志条目在相应索引上的任期是否一致
 		if rf.logs.getEntry(i+1+args.PrevLogIndex).Term != entry.Term {
+			// 发生了冲突
 			Debug(dLog2, "S%d Running into conflict with existing entries at T%d. conflictLogs: %v, startIndex: %d.",
 				rf.me, rf.currentTerm, args.Entries[i:], i+1+args.PrevLogIndex)
+			// 当前节点已有的与新的日志条目冲突的部分之前的日志切片 + 新的日志条目中产生冲突之后的部分
+			// 重新赋值给当前节点的日志
 			rf.logs = append(rf.logs.getSlice(1, i+1+args.PrevLogIndex), args.Entries[i:]...)
 			break
 		}
@@ -453,8 +461,8 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int  // 当前任期，对于领导人而言 它会更新自己的任期
 	Success bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
-	XTerm   int  // term in the conflicting entry (if any)
-	XIndex  int  // index of first entry with that term (if any)
+	XTerm   int  // 冲突条目的任期
+	XIndex  int  // 第一个与 XTerm 相同的日志条目的索引。领导者可以使用这个信息来找到从哪里开始重新发送日志。
 	XLen    int  // log length
 }
 
@@ -664,6 +672,11 @@ func (rf *Raft) sendEntries(isHeartbeat bool) {
 		if lastLogIndex >= nextIndex {
 			// If last log index ≥ nextIndex for a follower:
 			// send AppendEntries RPC with log entries starting at nextIndex
+			// 如果使用
+			// args.Entries = rf.logs.getSlice(nextIndex, lastLogIndex+1)
+			// 那么args.Entries将引用同一块内存，而不是创建一个新的切片。
+			// 这样，如果rf.logs后续发生变化，args.Entries也会受到影响，因为它们共享相同的底层数组。
+			// 因此,通过使用copy函数，创建一个新的切片，助避免潜在的并发问题
 			entries := make([]LogEntry, lastLogIndex-nextIndex+1)
 			copy(entries, rf.logs.getSlice(nextIndex, lastLogIndex+1))
 			args.Entries = entries
