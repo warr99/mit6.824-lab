@@ -126,17 +126,21 @@ type Raft struct {
 	timer           *time.Ticker  // 计时器
 
 	applyChan chan ApplyMsg // 用来写入通道
+
+	lastIncludedIndex int // 快照中包含的最后日志条目的索引值
+	lastIncludedTerm  int // 快照中包含的最后日志条目的任期号
 }
 
 // Get the index of first entry and last entry with the given term.
 // Return (-1,-1) if no such term is found
-func (logEntries LogEntries) getBoundsWithTerm(term int) (minIndex int, maxIndex int) {
+func (rf *Raft) getBoundsWithTerm(term int) (minIndex int, maxIndex int) {
 	if term == 0 {
 		return 0, 0
 	}
+	logEntries := rf.logs
 	minIndex, maxIndex = math.MaxInt, -1
-	for i := 1; i <= len(logEntries); i++ {
-		if logEntries[i-1].Term == term {
+	for i := rf.lastIncludedIndex + 1; i <= rf.lastIncludedIndex+len(logEntries); i++ {
+		if rf.getEntry(i).Term == term {
 			minIndex = int(math.Min(float64(minIndex), float64(i)))
 			maxIndex = int(math.Max(float64(maxIndex), float64(i)))
 		}
@@ -146,13 +150,16 @@ func (logEntries LogEntries) getBoundsWithTerm(term int) (minIndex int, maxIndex
 	}
 	return
 }
-func (logEntries LogEntries) lastLogInfo() (index, term int) {
-	index = len(logEntries)
-	logEntry := logEntries.getEntry(index)
+func (rf *Raft) lastLogInfo() (index, term int) {
+	logEntries := rf.logs
+	index = len(logEntries) + rf.lastIncludedIndex
+	logEntry := rf.getEntry(index)
 	return index, logEntry.Term
 }
 
-func (logEntries LogEntries) getEntry(index int) *LogEntry {
+func (rf *Raft) getEntry(index int) *LogEntry {
+	logEntries := rf.logs
+	index = index - rf.lastIncludedIndex
 	if index < 0 {
 		log.Panic("LogEntries.getEntry: index < 0.\n")
 	}
@@ -408,14 +415,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.timer.Reset(rf.electionTimeout)
 
 	// 返回假 如果接收者日志中没有包含这样一个条目 即该条目的任期在 prevLogIndex 上能和 prevLogTerm 匹配上
-	if args.PrevLogTerm == -1 || args.PrevLogTerm != rf.logs.getEntry(args.PrevLogIndex).Term {
+	if args.PrevLogTerm == -1 || args.PrevLogTerm != rf.getEntry(args.PrevLogIndex).Term {
 		Debug(dLog2, "S%d Prev log entries do not match. Ask leader to retry.", rf.me)
 		// 当前节点的日志长度
 		reply.XLen = len(rf.logs)
 		// 为前一个日志条目的任期
-		reply.XTerm = rf.logs.getEntry(args.PrevLogIndex).Term
+		reply.XTerm = rf.getEntry(args.PrevLogIndex).Term
 		// 具有相同任期的日志条目的最小索引(若找不到相同任期,为-1)
-		reply.XIndex, _ = rf.logs.getBoundsWithTerm(reply.XTerm)
+		reply.XIndex, _ = rf.getBoundsWithTerm(reply.XTerm)
 		return
 	}
 	// 如果一个已经存在的条目和新条目发生了冲突（因为索引相同，任期不同），
@@ -423,7 +430,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 遍历领导者发送的新的日志条目
 	for i, entry := range args.Entries {
 		// 检查新的日志条目与已有日志条目在相应索引上的任期是否一致
-		if rf.logs.getEntry(i+1+args.PrevLogIndex).Term != entry.Term {
+		if rf.getEntry(i+1+args.PrevLogIndex).Term != entry.Term {
 			// 发生了冲突
 			Debug(dLog2, "S%d Running into conflict with existing entries at T%d. conflictLogs: %v, startIndex: %d.",
 				rf.me, rf.currentTerm, args.Entries[i:], i+1+args.PrevLogIndex)
@@ -601,7 +608,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 			// 假设存在 N 满足N > commitIndex，
 			// 使得大多数的 matchIndex[i] ≥ N以及log[N].term == currentTerm 成立，
 			// 则令 commitIndex = N
-			for N := len(rf.logs); N > rf.commitIndex && rf.logs.getEntry(N).Term == rf.currentTerm; N-- {
+			for N := len(rf.logs); N > rf.commitIndex && rf.getEntry(N).Term == rf.currentTerm; N-- {
 				count := 1
 				// 遍历每个节点，检查其 matchIndex 是否大于等于 N
 				for peer, matchIndex := range rf.matchIndex {
@@ -625,7 +632,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 				// follower's log is too short
 				rf.nextIndex[server] = reply.XLen + 1
 			} else {
-				_, maxIndex := rf.logs.getBoundsWithTerm(reply.XTerm)
+				_, maxIndex := rf.getBoundsWithTerm(reply.XTerm)
 				if maxIndex != -1 {
 					// leader has XTerm
 					rf.nextIndex[server] = maxIndex
@@ -634,7 +641,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 					rf.nextIndex[server] = reply.XIndex
 				}
 			}
-			lastLogIndex, _ := rf.logs.lastLogInfo()
+			lastLogIndex, _ := rf.lastLogInfo()
 			nextIndex := rf.nextIndex[server]
 			if lastLogIndex >= nextIndex {
 				Debug(dLog, "S%d <- S%d Inconsistent logs, retrying.", rf.me, server)
@@ -644,7 +651,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
 					PrevLogIndex: nextIndex - 1,
-					PrevLogTerm:  rf.logs.getEntry(nextIndex - 1).Term,
+					PrevLogTerm:  rf.getEntry(nextIndex - 1).Term,
 					Entries:      entries,
 				}
 				go rf.leaderSendEntries(newArg, server)
@@ -656,7 +663,7 @@ func (rf *Raft) leaderSendEntries(args *AppendEntriesArgs, server int) {
 func (rf *Raft) sendEntries(isHeartbeat bool) {
 	Debug(dTimer, "S%d Resetting HBT, wait for next heartbeat broadcast.", rf.me)
 	rf.timer.Reset(HeartBeatTimeout)
-	lastLogIndex, _ := rf.logs.lastLogInfo()
+	lastLogIndex, _ := rf.lastLogInfo()
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
@@ -666,7 +673,7 @@ func (rf *Raft) sendEntries(isHeartbeat bool) {
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: nextIndex - 1,
-			PrevLogTerm:  rf.logs.getEntry(nextIndex - 1).Term,
+			PrevLogTerm:  rf.getEntry(nextIndex - 1).Term,
 			LeaderCommit: rf.commitIndex,
 		}
 		if lastLogIndex >= nextIndex {
@@ -817,7 +824,7 @@ func (rf *Raft) applyLogsLoop(applyCh chan ApplyMsg) {
 			rf.lastApplied++
 			appliedMsgs = append(appliedMsgs, ApplyMsg{
 				CommandValid: true,
-				Command:      rf.logs.getEntry(rf.lastApplied).Command,
+				Command:      rf.getEntry(rf.lastApplied).Command,
 				CommandIndex: rf.lastApplied,
 			})
 			Debug(dLog2, "S%d Applying log at T%d. LA: %d, CI: %d.", rf.me, rf.currentTerm, rf.lastApplied, rf.commitIndex)
@@ -857,6 +864,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
+
+	rf.lastIncludedIndex = -1
+	rf.lastIncludedTerm = -1
 
 	rf.status = Follower
 	// The election timeout is randomized to be between 150ms and 300ms.
