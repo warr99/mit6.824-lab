@@ -250,6 +250,12 @@ func (rf *Raft) persist() {
 	if err := e.Encode(rf.logs); err != nil {
 		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %v", err, rf.logs)
 	}
+	if err := e.Encode(rf.lastIncludedIndex); err != nil {
+		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedIndex\". err: %v, data: %v", err, rf.lastIncludedIndex)
+	}
+	if err := e.Encode(rf.lastIncludedTerm); err != nil {
+		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedTerm\". err: %v, data: %v", err, rf.lastIncludedTerm)
+	}
 	raftstate := w.Bytes()
 	rf.persister.Save(raftstate, nil)
 }
@@ -275,6 +281,12 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	if err := d.Decode(&logs); err != nil {
 		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %s", err, data)
+	}
+	if err := d.Decode(&rf.lastIncludedIndex); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.lastIncludedIndex\". err: %v, data: %s", err, data)
+	}
+	if err := d.Decode(&rf.lastIncludedTerm); err != nil {
+		Debug(dError, "Raft.readPersist: failed to decode \"rf.lastIncludedTerm\". err: %v, data: %s", err, data)
 	}
 	rf.currentTerm = currentTerm
 	rf.logs = logs
