@@ -101,3 +101,38 @@ func (rf *Raft) leaderSendSnapshot(args *InstallSnapshotArgs, server int) {
 		rf.matchIndex[server] = max(newMatch, rf.matchIndex[server])
 	}
 }
+
+// the service says it has created a snapshot that has
+// all info up to and including index. this means the
+// service no longer needs the log through (and including)
+// that index. Raft should now trim its log as much as possible.
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	// Your code here (2D).
+	Debug(dSnap, "S%d Snapshotting through index %d.", rf.me, index)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	lastLogIndex, _ := rf.lastLogInfo()
+	if rf.lastIncludedIndex >= index {
+		Debug(dSnap, "S%d Snapshot already applied to persistent storage. (%d >= %d)", rf.me, rf.lastIncludedIndex, index)
+		return
+	}
+	if rf.commitIndex < index {
+		Debug(dWarn, "S%d Cannot snapshot uncommitted log entries, discard the call. (%d < %d)", rf.me, rf.commitIndex, index)
+		return
+	}
+	newLog := rf.getSlice(index+1, lastLogIndex+1)
+	newLastIncludeTerm := rf.getEntry(index).Term
+
+	rf.lastIncludedTerm = newLastIncludeTerm
+	rf.logs = newLog
+	rf.lastIncludedIndex = index
+	if index > rf.commitIndex {
+		rf.commitIndex = index
+	}
+	if index > rf.lastApplied {
+		Debug(dSnap, "S%d set lastApplied=%d at Snapshot().", rf.me, index)
+		rf.lastApplied = index
+	}
+	rf.snapshot = snapshot
+	rf.persistAndSnapshot(snapshot)
+}
