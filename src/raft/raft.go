@@ -103,39 +103,6 @@ type Raft struct {
 	snapshot          []byte // 存储在内存中的快照信息
 }
 
-// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
-// Check if current term is out of date when hearing from other peers,
-// update term, revert to follower state and return true if necesarry
-func (rf *Raft) checkTerm(term int) bool {
-	if rf.currentTerm < term {
-		Debug(dTerm, "S%d Term is higher, updating term to T%d, setting state to follower. (%d > %d)",
-			rf.me, term, term, rf.currentTerm)
-		rf.status = Follower
-		rf.currentTerm = term
-		rf.votedFor = -1
-		rf.persist()
-		return true
-	}
-	return false
-}
-
-// return currentTerm and whether this server
-// believes it is the leader.
-func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	var term int
-	var isleader bool
-	// Your code here (2A).
-	term = rf.currentTerm
-	if rf.status == Leader {
-		isleader = true
-	} else {
-		isleader = false
-	}
-	return term, isleader
-}
-
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
@@ -205,8 +172,6 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastIncludedTerm = lastIncludedTerm
 }
 
-
-
 func (rf *Raft) persistAndSnapshot(snapshot []byte) {
 	Debug(dSnap, "S%d Saving persistent state and service snapshot to stable storage at T%d.", rf.me, rf.currentTerm)
 	w := new(bytes.Buffer)
@@ -229,7 +194,6 @@ func (rf *Raft) persistAndSnapshot(snapshot []byte) {
 	data := w.Bytes()
 	rf.persister.Save(data, snapshot)
 }
-
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
