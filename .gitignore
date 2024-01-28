@@ -5,3 +5,5 @@ api.key
 git 
 mr-tmp-*
 mr-out-*
+2024*
+*.log
