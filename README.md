@@ -12,3 +12,7 @@
   * 相关文档:
     * Raft 选举总结: https://juejin.cn/post/7313242001113333798
     * 实现思路: https://juejin.cn/post/7313242113436287014
+  
+## TIPS
+* 批量测试: VERBOSE=1 python3 dstest.py 2A -n 10
+* 后台测试: nohup VERBOSE=1 python3 dstest.py 2A -n 10 > output.log &
