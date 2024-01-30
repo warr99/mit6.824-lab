@@ -18,12 +18,12 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	Debug(dSnap, "S%d<-S%d recive install snapshot", rf.me, args.LeaderId)
+
 }
 
-func (rf *Raft) sendSnapshot(server int) {
-}
-
-func (rf *Raft) leaderSendSnapshot(args *InstallSnapshotArgs, server int) {	
+func (rf *Raft) leaderSendSnapShot(server int) {
+	Debug(dSnap, "S%d->S%d Leader send SnapShot", rf.me, server)
 }
 
 // the service says it has created a snapshot that has

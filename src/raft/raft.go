@@ -22,7 +22,6 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"bytes"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,9 +59,6 @@ const (
 
 )
 
-// 定义一个全局心跳超时时间
-var HeartBeatTimeout = 120 * time.Millisecond
-
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -79,6 +75,7 @@ type Raft struct {
 
 	currentTerm int        // 服务器已知最新的任期（在服务器首次启动时初始化为0，单调递增）
 	votedFor    int        // 当前任期内收到选票的 candidateId ，如果没有投给任何候选人则为空
+	voteNum     int        // 当前任期内获得的票数
 	logs        LogEntries //日志条目；每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
 
 	// 所有服务器上的易失性状态
@@ -92,15 +89,19 @@ type Raft struct {
 	matchIndex []int // 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 
 	// Others
-	status          Status        // 当前节点状态
-	electionTimeout time.Duration // 追随者在成为候选人之前等待的时间
-	timer           *time.Ticker  // 计时器
+	status     Status    // 当前节点状态
+	votedTimer time.Time // 选举重置时间
 
 	applyChan chan ApplyMsg // 用来写入通道
 
-	lastIncludedIndex int    // 快照中包含的最后日志条目的索引值
-	lastIncludedTerm  int    // 快照中包含的最后日志条目的任期号
-	snapshot          []byte // 存储在内存中的快照信息
+	lastIncludedIndex int // 快照中包含的最后日志条目的索引值
+	lastIncludedTerm  int // 快照中包含的最后日志条目的任期号
+}
+
+func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.status == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -172,29 +173,6 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastIncludedTerm = lastIncludedTerm
 }
 
-func (rf *Raft) persistAndSnapshot(snapshot []byte) {
-	Debug(dSnap, "S%d Saving persistent state and service snapshot to stable storage at T%d.", rf.me, rf.currentTerm)
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	if err := e.Encode(rf.currentTerm); err != nil {
-		Debug(dError, "Raft.persistAndSnapshot: failed to encode \"rf.currentTerm\". err: %v, data: %v", err, rf.currentTerm)
-	}
-	if err := e.Encode(rf.votedFor); err != nil {
-		Debug(dError, "Raft.persistAndSnapshot: failed to encode \"rf.votedFor\". err: %v, data: %v", err, rf.votedFor)
-	}
-	if err := e.Encode(rf.logs); err != nil {
-		Debug(dError, "Raft.persistAndSnapshot: failed to encode \"rf.log\". err: %v, data: %v", err, rf.logs)
-	}
-	if err := e.Encode(rf.lastIncludedIndex); err != nil {
-		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedIndex\". err: %v, data: %v", err, rf.lastIncludedIndex)
-	}
-	if err := e.Encode(rf.lastIncludedTerm); err != nil {
-		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedTerm\". err: %v, data: %v", err, rf.lastIncludedTerm)
-	}
-	data := w.Bytes()
-	rf.persister.Save(data, snapshot)
-}
-
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -208,28 +186,22 @@ func (rf *Raft) persistAndSnapshot(snapshot []byte) {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
 
 	// Your code here (2B).
-
-	if rf.killed() {
-		return index, term, false
-	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if rf.status != Leader {
-		return index, term, false
+	if rf.killed() {
+		return -1, -1, false
 	}
-	isLeader = true
-	appendLog := LogEntry{Term: rf.currentTerm, Command: command}
-	Debug(dLog, "S%d leader append log, command:%v\n", rf.me, command)
-	rf.logs = append(rf.logs, appendLog)
-	index = len(rf.logs) + rf.lastIncludedIndex
-	term = rf.currentTerm
-	rf.persist()
-	return index, term, isLeader
+	if rf.status != Leader {
+		return -1, -1, false
+	} else {
+		index := rf.getLastIndex() + 1
+		term := rf.currentTerm
+		rf.logs = append(rf.logs, LogEntry{Term: term, Command: command})
+		rf.persist()
+		return index, term, true
+	}
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -243,18 +215,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
-	rf.mu.Lock()
-	rf.timer.Stop()
-	rf.mu.Unlock()
-	Debug(dClient, "S%d Current client is exiting.", rf.me)
 }
 
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
-
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -273,35 +239,37 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.applyChan = applyCh
+	rf.mu.Lock()
+
+	rf.status = Follower
 	rf.currentTerm = 0
+	rf.voteNum = 0
 	rf.votedFor = -1
-	rf.logs = make([]LogEntry, 0)
 
-	rf.commitIndex = 0
-	Debug(dInfo, "S%d init set the lastApplied=0", rf.me)
 	rf.lastApplied = 0
-
-	rf.nextIndex = make([]int, len(peers))
-	rf.matchIndex = make([]int, len(peers))
+	rf.commitIndex = 0
 
 	rf.lastIncludedIndex = 0
 	rf.lastIncludedTerm = 0
 
-	rf.status = Follower
-	// The election timeout is randomized to be between 150ms and 300ms.
-	rf.electionTimeout = time.Duration(150+rand.Intn(150)) * time.Millisecond
-	rf.timer = time.NewTicker(rf.electionTimeout)
+	rf.logs = []LogEntry{}
+	rf.logs = append(rf.logs, LogEntry{})
+	rf.applyChan = applyCh
+	rf.mu.Unlock()
 
-	// initialize from state persisted before a crash
+	// initialize from status persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	// start ticker goroutine to start elections
+
+	// 同步快照信息
 	if rf.lastIncludedIndex > 0 {
 		rf.lastApplied = rf.lastIncludedIndex
-		Debug(dInfo, "S%d readPersist() set the lastApplied=%d", rf.me, rf.lastApplied)
 	}
-	go rf.ticker()
-	go rf.applyLogsLoop(applyCh)
+
+	go rf.electionTicker()
+
+	go rf.appendTicker()
+
+	go rf.committedTicker()
 
 	return rf
 }
