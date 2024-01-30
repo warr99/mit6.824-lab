@@ -48,18 +48,17 @@ func (rf *Raft) getPrevLogInfo(server int) (int, int) {
 	return newEntryBeginIndex, rf.getLogTerm(newEntryBeginIndex)
 }
 
+// UpToDate paper中投票RPC的rule2
+func (rf *Raft) UpToDate(index int, term int) bool {
+	lastIndex := rf.getLastIndex()
+	lastTerm := rf.getLastTerm()
+	return term > lastTerm || (term == lastTerm && index >= lastIndex)
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	} else {
 		return b
-	}
-}
-
-func max(a, b int) int {
-	if a < b {
-		return b
-	} else {
-		return a
 	}
 }

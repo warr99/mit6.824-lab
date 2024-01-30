@@ -51,6 +51,7 @@ func (rf *Raft) sendElection() {
 				// 返回的任期大于传出的任期
 				if reply.Term > args.Term && rf.currentTerm == args.Term {
 					if rf.currentTerm < reply.Term {
+						Debug(dVote, "S%d Term is lower, invalid vote reply. (%d < %d)", rf.me, reply.Term, rf.currentTerm)
 						rf.currentTerm = reply.Term
 					}
 					rf.status = Follower
@@ -60,10 +61,11 @@ func (rf *Raft) sendElection() {
 					rf.mu.Unlock()
 					return
 				}
-				if reply.VoteGranted {
+				if reply.VoteGranted && rf.currentTerm == args.Term {
+					Debug(dVote, "S%d<-S%d Get a yes vote at T%d.", rf.me, server, rf.currentTerm)
 					rf.voteNum += 1
 					if rf.voteNum >= len(rf.peers)/2+1 {
-						Debug(dVote, "S%d reach a majority of votes, become to leader", rf.me)
+						Debug(dLeader, "S%d Received majority votes at T%d. Become leader.", rf.me, rf.currentTerm)
 						// 重置节点状态
 						rf.status = Leader
 						rf.votedFor = -1
@@ -146,11 +148,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// 如果后候选者的任期没有落后，继续判断候选者的日志有没有落后
-	lastLogIndex := rf.getLastIndex()
-	lastLogTerm := rf.getLastTerm()
-	if args.LastLogTerm < lastLogTerm ||
-		args.LastLogTerm == lastLogTerm && args.LastLogIndex < lastLogIndex ||
-		(rf.votedFor != -1 && rf.votedFor != args.CandidateId && args.Term == reply.Term) {
+	if !rf.UpToDate(args.LastLogIndex, args.LastLogTerm) || // 判断日志是否conflict
+		rf.votedFor != -1 && rf.votedFor != args.CandidateId && args.Term == reply.Term {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
