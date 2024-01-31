@@ -94,8 +94,8 @@ type Raft struct {
 
 	applyChan chan ApplyMsg // 用来写入通道
 
-	lastIncludedIndex int // 快照中包含的最后日志条目的索引值
-	lastIncludedTerm  int // 快照中包含的最后日志条目的任期号
+	lastIncludeIndex int // 快照中包含的最后日志条目的索引值
+	lastIncludeTerm  int // 快照中包含的最后日志条目的任期号
 }
 
 func (rf *Raft) GetState() (int, bool) {
@@ -104,73 +104,54 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.status == Leader
 }
 
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-// before you've implemented snapshots, you should pass nil as the
-// second argument to persister.Save().
-// after you've implemented snapshots, pass the current snapshot
-// (or nil if there's not yet a snapshot).
-func (rf *Raft) persist() {
-	Debug(dPersist, "S%d saving Raft's persistent state to stable storage at T%d.", rf.me, rf.currentTerm)
+func (rf *Raft) persistData() []byte {
 	// Your code here (2C).
 	// Example:
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	if err := e.Encode(rf.currentTerm); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.currentTerm\". err: %v, data: %v", err, rf.currentTerm)
-	}
-	if err := e.Encode(rf.votedFor); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.votedFor\". err: %v, data: %v", err, rf.votedFor)
-	}
-	if err := e.Encode(rf.logs); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %v", err, rf.logs)
-	}
-	if err := e.Encode(rf.lastIncludedIndex); err != nil {
-		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedIndex\". err: %v, data: %v", err, rf.lastIncludedIndex)
-	}
-	if err := e.Encode(rf.lastIncludedTerm); err != nil {
-		Debug(dError, "Raft.persist: failed to encode \"rf.lastIncludedTerm\". err: %v, data: %v", err, rf.lastIncludedTerm)
-	}
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	e.Encode(rf.lastIncludeIndex)
+	e.Encode(rf.lastIncludeTerm)
+	data := w.Bytes()
+	//fmt.Printf("RaftNode[%d] persist starts, currentTerm[%d] voteFor[%d] log[%v]\n", rf.me, rf.currentTerm, rf.votedFor, rf.logs)
+	return data
 }
 
-// restore previously persisted state.
+func (rf *Raft) persist() {
+	data := rf.persistData()
+	rf.persister.SaveRaftState(data)
+}
+
+//
+// restore previously persisted status.
+//
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 { // bootstrap without any status?
 		return
 	}
 	// Your code here (2C).
-	// 字节缓冲区
+	// Example:
 	r := bytes.NewBuffer(data)
-	// Gob 解码器
 	d := labgob.NewDecoder(r)
 	var currentTerm int
 	var votedFor int
 	var logs []LogEntry
-	var lastIncludedIndex int
-	var lastIncludedTerm int
-	if err := d.Decode(&currentTerm); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.currentTerm\". err: %v, data: %s", err, data)
+	var lastIncludeIndex int
+	var lastIncludeTerm int
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&logs) != nil ||
+		d.Decode(&lastIncludeIndex) != nil ||
+		d.Decode(&lastIncludeTerm) != nil {
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.logs = logs
+		rf.lastIncludeIndex = lastIncludeIndex
+		rf.lastIncludeTerm = lastIncludeTerm
 	}
-	if err := d.Decode(&votedFor); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.votedFor\". err: %v, data: %s", err, data)
-	}
-	if err := d.Decode(&logs); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.logs\". err: %v, data: %s", err, data)
-	}
-	if err := d.Decode(&lastIncludedIndex); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.lastIncludedIndex\". err: %v, data: %s", err, data)
-	}
-	if err := d.Decode(&lastIncludedTerm); err != nil {
-		Debug(dError, "Raft.readPersist: failed to decode \"rf.lastIncludedTerm\". err: %v, data: %s", err, data)
-	}
-	rf.currentTerm = currentTerm
-	rf.logs = logs
-	rf.votedFor = votedFor
-	rf.lastIncludedIndex = lastIncludedIndex
-	rf.lastIncludedTerm = lastIncludedTerm
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -249,8 +230,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.commitIndex = 0
 
-	rf.lastIncludedIndex = 0
-	rf.lastIncludedTerm = 0
+	rf.lastIncludeIndex = 0
+	rf.lastIncludeTerm = 0
 
 	rf.logs = []LogEntry{}
 	rf.logs = append(rf.logs, LogEntry{})
@@ -261,8 +242,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// 同步快照信息
-	if rf.lastIncludedIndex > 0 {
-		rf.lastApplied = rf.lastIncludedIndex
+	if rf.lastIncludeIndex > 0 {
+		rf.lastApplied = rf.lastIncludeIndex
 	}
 
 	go rf.electionTicker()
