@@ -27,14 +27,14 @@ type ApplyMsg struct {
 
 // 选举定时器
 func (rf *Raft) electionTicker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		nowTime := time.Now()
 		time.Sleep(time.Duration(generateOverTime(int64(rf.me))) * time.Millisecond)
 
 		rf.mu.Lock()
 
 		// 时间过期发起选举
-		// 此处的流程为每次每次votedTimer如果小于在sleep睡眠之前定义的时间，就代表没有votedTimer没被更新为最新的时间，则发起选举
+		// 如果 sleep 之后，votedTimer 的时间没有被重置，还是在 nowTime 之前 -> 发起新一轮的选举
 		if rf.votedTimer.Before(nowTime) && rf.status != Leader {
 			// 转变状态
 			rf.status = Candidate
@@ -43,7 +43,6 @@ func (rf *Raft) electionTicker() {
 			rf.currentTerm += 1
 			rf.persist()
 
-			//fmt.Printf("[++++elect++++] :Rf[%v] send a election\n", rf.me)
 			rf.sendElection()
 			rf.votedTimer = time.Now()
 
@@ -54,7 +53,7 @@ func (rf *Raft) electionTicker() {
 }
 
 func (rf *Raft) appendTicker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 		time.Sleep(HeartbeatSleep * time.Millisecond)
 		rf.mu.Lock()
 		if rf.status == Leader {
@@ -68,7 +67,7 @@ func (rf *Raft) appendTicker() {
 
 func (rf *Raft) committedTicker() {
 	// put the committed entry to apply on the status machine
-	for rf.killed() == false {
+	for !rf.killed() {
 		time.Sleep(AppliedSleep * time.Millisecond)
 		rf.mu.Lock()
 

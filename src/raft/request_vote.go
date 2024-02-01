@@ -44,7 +44,8 @@ func (rf *Raft) sendElection() {
 			rf.mu.Unlock()
 			res := rf.sendRequestVote(server, &args, &reply)
 
-			if res == true {
+			if res {
+				Debug(dVote, "S%d <- S%d Received request vote reply at T%d.", rf.me, server, rf.currentTerm)
 				rf.mu.Lock()
 				// 判断自身是否还是竞选者，且任期不冲突
 				if rf.status != Candidate || args.Term < rf.currentTerm {
@@ -54,6 +55,7 @@ func (rf *Raft) sendElection() {
 
 				// 返回者的任期大于args（网络分区原因)进行返回
 				if reply.Term > args.Term {
+					Debug(dVote, "S%d Term is lower, Candidate change to Follower. (%d < %d)", rf.me, args.Term, rf.currentTerm)
 					if rf.currentTerm < reply.Term {
 						rf.currentTerm = reply.Term
 					}
@@ -66,24 +68,26 @@ func (rf *Raft) sendElection() {
 				}
 
 				// 返回结果正确判断是否大于一半节点同意
-				if reply.VoteGranted == true && rf.currentTerm == args.Term {
+				if reply.VoteGranted && rf.currentTerm == args.Term {
 					rf.voteNum += 1
+					Debug(dVote, "S%d <- S%d Get a yes vote at T%d.", rf.me, server, rf.currentTerm)
 					if rf.voteNum >= len(rf.peers)/2+1 {
-
-						//fmt.Printf("[++++elect++++] :Rf[%v] to be leader,term is : %v\n", rf.me, rf.currentTerm)
+						Debug(dLeader, "S%d Received majority votes at T%d. Become leader.", rf.me, rf.currentTerm)
 						rf.status = Leader
 						rf.votedFor = -1
 						rf.voteNum = 0
 						rf.persist()
 
+						// 初始话 nextIndex[] matchIndex[]
 						rf.nextIndex = make([]int, len(rf.peers))
+						rf.matchIndex = make([]int, len(rf.peers))
 						for i := 0; i < len(rf.peers); i++ {
 							rf.nextIndex[i] = rf.getLastIndex() + 1
+							rf.matchIndex[i] = 0
 						}
-
-						rf.matchIndex = make([]int, len(rf.peers))
 						rf.matchIndex[rf.me] = rf.getLastIndex()
 
+						Debug(dTimer, "S%d reset voted timer", rf.me)
 						rf.votedTimer = time.Now()
 						rf.mu.Unlock()
 						return
@@ -107,14 +111,14 @@ func (rf *Raft) sendElection() {
 // 个人认为定时刷新的地方应该是别的节点与当前节点在数据上不冲突时才要刷新
 // 因为如果不是数据冲突那么定时相当于防止自身去选举的一个心跳
 // 如果是因为数据冲突，那么这个节点不用刷新定时是为了当前整个raft能尽快有个正确的leader
-//
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	Debug(dVote, "S%d <- S%d Received vote request at T%d.", rf.me, args.CandidateId, rf.currentTerm)
 	// 由于网络分区或者是节点crash，导致的任期比接收者还小，直接返回
 	if args.Term < rf.currentTerm {
+		Debug(dVote, "S%d Term is lower, rejecting the vote. (%d < %d)", rf.me, args.Term, rf.currentTerm)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -133,23 +137,31 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// If votedFor is null or candidateId, and candidate’s logs is at
 	// least as up-to-date as receiver’s logs, grant vote
-	if !rf.UpToDate(args.LastLogIndex, args.LastLogTerm) || // 判断日志是否conflict
-		rf.votedFor != -1 && rf.votedFor != args.CandidateId && args.Term == reply.Term { // paper中的第二个条件votedFor is null
 
-		// 满足以上两个其中一个都返回false，不给予投票
+	// if candidate’s logs is at least as up-to-date as receiver’s logs -> 判断日志是否conflict
+	if !rf.UpToDate(args.LastLogIndex, args.LastLogTerm) {
+		Debug(dVote, "S%d candidate's logs is not at least as up-to-date as receiver's logs, rejecting the vote", rf.me)
+		reply.VoteGranted = false
+		reply.Term = rf.currentTerm
+		return
+	}
+	// if votedFor is null or candidateId
+	if rf.votedFor != -1 && rf.votedFor != args.CandidateId && args.Term == reply.Term {
+		Debug(dVote, "S%d Already voted for S%d, rejecting the vote.", rf.me, rf.votedFor)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
 	} else {
+		Debug(dVote, "S%d Granting vote to S%d at T%d.", rf.me, args.CandidateId, args.Term)
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
 		reply.Term = rf.currentTerm
+		Debug(dTimer, "S%d Resetting ELT, wait for next potential election timeout.", rf.me)
 		rf.votedTimer = time.Now()
 		rf.persist()
 		return
 	}
-
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -180,6 +192,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	Debug(dVote, "S%d -> S%d Send request vote.", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
