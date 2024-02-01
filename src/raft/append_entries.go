@@ -201,7 +201,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	Debug(dLog, "S%d -> S%d Leader send entries, PrevLogIndex=%d, PrevLogTerm=%d",
+	Debug(dLog, "S%d -> S%d Leader send entries, PrevLogIndex:%d, PrevLogTerm:%d",
 		rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok

@@ -22,9 +22,8 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 }
 
 func (rf *Raft) leaderSendSnapShot(server int) {
-
 	rf.mu.Lock()
-
+	Debug(dSnap, "S%d -> S%d Sending installing snapshot request at T%d.", rf.me, server, rf.currentTerm)
 	args := InstallSnapshotArgs{
 		rf.currentTerm,
 		rf.me,
@@ -38,7 +37,7 @@ func (rf *Raft) leaderSendSnapShot(server int) {
 
 	res := rf.sendInstallSnapshot(server, &args, &reply)
 
-	if res == true {
+	if res {
 		rf.mu.Lock()
 		if rf.status != Leader || rf.currentTerm != args.Term {
 			rf.mu.Unlock()
@@ -47,6 +46,8 @@ func (rf *Raft) leaderSendSnapShot(server int) {
 
 		// 如果返回的term比自己大说明自身数据已经不合适了
 		if reply.Term > rf.currentTerm {
+			Debug(dSnap, "S%d Current Term lower, change to Follower (%d < %d)",
+				rf.me, reply.Term, rf.currentTerm)
 			rf.status = Follower
 			rf.votedFor = -1
 			rf.voteNum = 0
@@ -55,7 +56,7 @@ func (rf *Raft) leaderSendSnapShot(server int) {
 			rf.mu.Unlock()
 			return
 		}
-
+		// reset matchIndex nextIndex
 		rf.matchIndex[server] = args.LastIncludeIndex
 		rf.nextIndex[server] = args.LastIncludeIndex + 1
 
@@ -67,7 +68,9 @@ func (rf *Raft) leaderSendSnapShot(server int) {
 // InstallSnapShot RPC Handler
 func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
+	Debug(dSnap, "S%d <- S%d Received install snapshot request at T%d.", rf.me, args.LeaderId, rf.currentTerm)
 	if rf.currentTerm > args.Term {
+		Debug(dSnap, "S%d Term is lower, rejecting install snapshot request. (%d < %d)", rf.me, args.Term, rf.currentTerm)
 		reply.Term = rf.currentTerm
 		rf.mu.Unlock()
 		return
@@ -80,9 +83,12 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.votedFor = -1
 	rf.voteNum = 0
 	rf.persist()
+	Debug(dTimer, "S%d Resetting ELT, wait for next potential heartbeat timeout.", rf.me)
 	rf.votedTimer = time.Now()
 
 	if rf.lastIncludeIndex >= args.LastIncludeIndex {
+		Debug(dSnap, "S%d A newer snapshot already exists, rejecting install snapshot request. (%d <= %d)",
+			rf.me, args.LastIncludeIndex, rf.lastIncludeIndex)
 		rf.mu.Unlock()
 		return
 	}
@@ -91,19 +97,20 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	index := args.LastIncludeIndex
 	tempLog := make([]LogEntry, 0)
 	tempLog = append(tempLog, LogEntry{})
-
+	
 	for i := index + 1; i <= rf.getLastIndex(); i++ {
 		tempLog = append(tempLog, rf.restoreLog(i))
 	}
-
+	rf.logs = tempLog
 	rf.lastIncludeTerm = args.LastIncludeTerm
 	rf.lastIncludeIndex = args.LastIncludeIndex
-
-	rf.logs = tempLog
+	Debug(dSnap, "S%d reset lastIncludeTerm:%d, lastIncludeIndex:%d", rf.me, rf.lastIncludeTerm, args.LastIncludeIndex)
 	if index > rf.commitIndex {
+		Debug(dSnap, "S%d reset commitIndex:%d", rf.me, index)
 		rf.commitIndex = index
 	}
 	if index > rf.lastApplied {
+		Debug(dSnap, "S%d reset lastApplied:%d", rf.me, index)
 		rf.lastApplied = index
 	}
 	rf.persister.Save(rf.persistData(), args.Data)
@@ -114,6 +121,7 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotTerm:  rf.lastIncludeTerm,
 		SnapshotIndex: rf.lastIncludeIndex,
 	}
+	Debug(dSnap, "S%d send snap msg to applyChan")
 	rf.mu.Unlock()
 
 	rf.applyChan <- msg
@@ -134,9 +142,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	Debug(dSnap, "S%d Snapshotting through index %d.", rf.me, index)
 	// 如果下标大于自身的提交，说明没被提交不能安装快照，如果自身快照点大于index说明不需要安装
-	//fmt.Println("[Snapshot] commintIndex", rf.commitIndex)
-	if rf.lastIncludeIndex >= index || index > rf.commitIndex {
+	if rf.lastIncludeIndex >= index {
+		Debug(dSnap, "S%d Snapshot already applied to persistent storage. (%d >= %d)", rf.me, rf.lastIncludeIndex, index)
+		return
+	}
+	if rf.commitIndex < index {
+		Debug(dWarn, "S%d Cannot snapshot uncommitted log entries, discard the call. (%d < %d)", rf.me, rf.commitIndex, index)
 		return
 	}
 	// 更新快照日志
@@ -146,7 +159,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		sLogs = append(sLogs, rf.restoreLog(i))
 	}
 
-	//fmt.Printf("[Snapshot-Rf(%v)]rf.commitIndex:%v,index:%v\n", rf.me, rf.commitIndex, index)
 	// 更新快照下标/任期
 	if index == rf.getLastIndex()+1 {
 		rf.lastIncludeTerm = rf.getLastTerm()
@@ -155,13 +167,16 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	}
 
 	rf.lastIncludeIndex = index
+	Debug(dSnap, "S%d reset lastIncludeTerm:%d, lastIncludeIndex:%d", rf.me, rf.lastIncludeTerm, index)
 	rf.logs = sLogs
 
-	// apply了快照就应该重置commitIndex、lastApplied
+	// reset commitIndex lastApplied
 	if index > rf.commitIndex {
+		Debug(dSnap, "S%d reset commitIndex:%d", rf.me, index)
 		rf.commitIndex = index
 	}
 	if index > rf.lastApplied {
+		Debug(dSnap, "S%d reset lastApplied:%d", rf.me, index)
 		rf.lastApplied = index
 	}
 

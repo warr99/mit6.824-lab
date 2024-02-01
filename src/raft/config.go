@@ -209,6 +209,8 @@ func (cfg *config) ingestSnap(i int, snapshot []byte, index int) string {
 const SnapShotInterval = 10
 
 // periodically snapshot raft state
+// 一个应用器（applier）的函数，负责处理对 Raft 集群中某个节点的应用消息
+// 函数接收来自 applyCh 通道的 ApplyMsg 消息，根据消息的类型进行相应的处理
 func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	cfg.mu.Lock()
 	rf := cfg.rafts[i]
@@ -219,11 +221,12 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 
 	for m := range applyCh {
 		err_msg := ""
+		// 收到的是快照信息，调用 cfg.ingestSnap 函数进行处理
 		if m.SnapshotValid {
 			cfg.mu.Lock()
 			err_msg = cfg.ingestSnap(i, m.Snapshot, m.SnapshotIndex)
 			cfg.mu.Unlock()
-		} else if m.CommandValid {
+		} else if m.CommandValid { // 收到的是日志命令
 			if m.CommandIndex != cfg.lastApplied[i]+1 {
 				Debug(dError, "server %v apply out of order, expected index %v, got %v", i, cfg.lastApplied[i]+1, m.CommandIndex)
 				err_msg = fmt.Sprintf("server %v apply out of order, expected index %v, got %v", i, cfg.lastApplied[i]+1, m.CommandIndex)
@@ -242,7 +245,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 			cfg.mu.Lock()
 			cfg.lastApplied[i] = m.CommandIndex
 			cfg.mu.Unlock()
-
+			// 检查当前的 CommandIndex 是否是 SnapShotInterval(10) 的倍数，如果是，则表示需要生成快照
 			if (m.CommandIndex+1)%SnapShotInterval == 0 {
 				w := new(bytes.Buffer)
 				e := labgob.NewEncoder(w)
