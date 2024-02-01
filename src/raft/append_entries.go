@@ -14,9 +14,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  // 当前任期，对于领导人而言 它会更新自己的任期
-	Success bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
-	UpNextIndex  int  // 第一个与 XTerm 相同的日志条目的索引。领导者可以使用这个信息来找到从哪里开始重新发送日志。
+	Term        int  // 当前任期，对于领导人而言 它会更新自己的任期
+	Success     bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
+	UpNextIndex int  // 第一个与 XTerm 相同的日志条目的索引。领导者可以使用这个信息来找到从哪里开始重新发送日志。
 }
 
 func (rf *Raft) leaderAppendEntries() {
@@ -34,9 +34,9 @@ func (rf *Raft) leaderAppendEntries() {
 				return
 			}
 
-			//installSnapshot，如果rf.nextIndex[i]-1小于等lastIncludeIndex,说明followers的日志小于自身的快照状态，将自己的快照发过去
-			// 同时要注意的是比快照还小时，已经算是比较落后
+			// rf.nextIndex[i]-1 <= lastIncludeIndex -> Follower 的日志小于 Leader 的快照状态，将自己的快照发过去
 			if rf.nextIndex[server]-1 < rf.lastIncludeIndex {
+				Debug(dLog, "S%d old logs were cleared after the snapshot, send an InstallSnapshot RPC instead", rf.me)
 				go rf.leaderSendSnapShot(server)
 				rf.mu.Unlock()
 				return
@@ -61,18 +61,25 @@ func (rf *Raft) leaderAppendEntries() {
 			reply := AppendEntriesReply{}
 			rf.mu.Unlock()
 
-			//fmt.Printf("[TIKER-SendHeart-Rf(%v)-To(%v)] args:%+v,curStatus%v\n", rf.me, server, args, rf.status)
 			re := rf.sendAppendEntries(server, &args, &reply)
 
-			if re == true {
+			if re {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-
+				Debug(dLog, "S%d <- S%d Received send entries reply at T%d.", rf.me, server, rf.currentTerm)
 				if rf.status != Leader {
 					return
 				}
-
+				// 返回的任期已经落后当前任期 -> reply 无效
+				if reply.Term < rf.currentTerm {
+					Debug(dLog, "S%d Reply Term lower, invalid send entry reply. (%d < %d)",
+						rf.me, reply.Term, rf.currentTerm)
+					return
+				}
+				// 返回的任期大于当前任期 -> 当前节点落后 change to Follower
 				if reply.Term > rf.currentTerm {
+					Debug(dLog, "S%d Current Term lower, change to Follower (%d < %d)",
+						rf.me, reply.Term, rf.currentTerm)
 					rf.currentTerm = reply.Term
 					rf.status = Follower
 					rf.votedFor = -1
@@ -81,14 +88,20 @@ func (rf *Raft) leaderAppendEntries() {
 					rf.votedTimer = time.Now()
 					return
 				}
+				// 当前任期不等于发送请求时的任期(发送之后任期发生改变) -> 放弃该回复
+				if rf.currentTerm != args.Term {
+					Debug(dWarn, "S%d Term has changed after the append request, send entry reply discarded. "+
+						"requestTerm: %d, currentTerm: %d.", rf.me, args.Term, rf.currentTerm)
+					return
+				}
 
 				if reply.Success {
-
+					// 更新 Follower 节点的 commitIndex 和 matchIndex
 					rf.commitIndex = rf.lastIncludeIndex
 					rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[server] = rf.matchIndex[server] + 1
 
-					// 外层遍历下标是否满足,从快照最后开始反向进行
+					// 外层遍历下标是否满足,从最大的索引开始反向遍历
 					for index := rf.getLastIndex(); index >= rf.lastIncludeIndex+1; index-- {
 						sum := 0
 						for i := 0; i < len(rf.peers); i++ {
@@ -101,15 +114,17 @@ func (rf *Raft) leaderAppendEntries() {
 							}
 						}
 
-						// 大于一半，且因为是从后往前，一定会大于原本commitIndex
+						// 如果超过半数以上节点的匹配索引满足条件，且当前索引对应的任期与当前节点的任期相同
 						if sum >= len(rf.peers)/2+1 && rf.restoreLogTerm(index) == rf.currentTerm {
+							Debug(dCommit, "S%d Updated commitIndex at T%d for majority consensus. commitIndex: %d.", rf.me, rf.currentTerm, rf.commitIndex)
 							rf.commitIndex = index
 							break
 						}
 
 					}
-				} else { // 返回为冲突
-					// 如果冲突不为-1，则进行更新
+				} else {
+					// 追加日志发生冲突 -> 进行更新
+					Debug(dLog, "S%d <- S%d Inconsistent logs, need retry.", rf.me, server)
 					if reply.UpNextIndex != -1 {
 						rf.nextIndex[server] = reply.UpNextIndex
 					}
@@ -121,19 +136,28 @@ func (rf *Raft) leaderAppendEntries() {
 	}
 }
 
+// 返回假 如果领导人的任期小于接收者的当前任期（译者注：这里的接收者是指跟随者或者候选人）（5.1 节）
+// 返回假 如果接收者日志中没有包含这样一个条目 即该条目的任期在 prevLogIndex 上能和 prevLogTerm 匹配上
+//
+//	（译者注：在接收者日志中 如果能找到一个和 prevLogIndex 以及 prevLogTerm 一样的索引和任期的日志条目 则继续执行下面的步骤 否则返回假）（5.3 节）
+//
+// 如果一个已经存在的条目和新条目（译者注：即刚刚接收到的日志条目）发生了冲突（因为索引相同，任期不同），
+// 那么就删除这个已经存在的条目以及它之后的所有条目 （5.3 节）
+// 追加日志中尚未存在的任何新条目
+// 如果领导人的已知已提交的最高日志条目的索引大于接收者的已知已提交最高日志条目的索引（leaderCommit > commitIndex），则把接收者的已知已经提交的最高的日志条目的索引commitIndex 重置为 领导人的已知已经提交的最高的日志条目的索引 leaderCommit 或者是 上一个新条目的索引 取两者的最小值
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//defer fmt.Printf("[	AppendEntries--Return-Rf(%v) 	] arg:%+v, reply:%+v\n", rf.me, args, reply)
-
+	Debug(dLog2, "S%d <- S%d Received append entries at T%d.", rf.me, args.LeaderId, rf.currentTerm)
 	// Reply false if term < currentTerm (§5.1)
 	if args.Term < rf.currentTerm {
+		Debug(dLog2, "S%d Term is lower, rejecting append request. (%d < %d)", rf.me, args.Term, rf.currentTerm)
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		reply.UpNextIndex = -1
 		return
 	}
-
+	// 重置 Follower 节点的状态
 	reply.Success = true
 	reply.Term = args.Term
 	reply.UpNextIndex = -1
@@ -145,22 +169,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.persist()
 	rf.votedTimer = time.Now()
 
-	// Reply false if log doesn’t contain an entry at prevLogIndex
-	// whose term matches prevLogTerm (§5.3)
-	// 自身的快照Index比发过来的prevLogIndex还大，所以返回冲突的下标加1(原因是冲突的下标用来更新nextIndex，nextIndex比Prev大1
-	// 返回冲突下标的目的是为了减少RPC请求次数
+	// 如果自身的快照索引比请求中的 PrevLogIndex 还大，说明存在冲突，返回冲突的下一个索引（用于更新 Leader 的 nextIndex）
 	if rf.lastIncludeIndex > args.PrevLogIndex {
 		reply.Success = false
 		reply.UpNextIndex = rf.getLastIndex() + 1
 		return
 	}
 
-	// 如果自身最后的快照日志比prev小说明中间有缺失日志，such 3、4、5、6、7 返回的开头为6、7，而自身到4，缺失5
+	// 如果自身的最后日志索引小于请求中的 PrevLogIndex，说明 Follower 缺失日志，返回自身的最后索引
 	if rf.getLastIndex() < args.PrevLogIndex {
 		reply.Success = false
 		reply.UpNextIndex = rf.getLastIndex()
 		return
 	} else {
+		// 如果在 prevLogIndex 处的日志条目的 term 与 prevLogTerm 不匹配，那么回复 false (§5.3)
 		if rf.restoreLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
 			reply.Success = false
 			tempTerm := rf.restoreLogTerm(args.PrevLogIndex)
@@ -187,10 +209,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.getLastIndex())
 	}
-	return
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	Debug(dLog, "S%d -> S%d Leader send entries, PrevLogIndex=%d, PrevLogTerm=%d",
+		rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }

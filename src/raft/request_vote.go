@@ -45,8 +45,8 @@ func (rf *Raft) sendElection() {
 			res := rf.sendRequestVote(server, &args, &reply)
 
 			if res {
-				Debug(dVote, "S%d <- S%d Received request vote reply at T%d.", rf.me, server, rf.currentTerm)
 				rf.mu.Lock()
+				Debug(dVote, "S%d <- S%d Received request vote reply at T%d.", rf.me, server, rf.currentTerm)
 				// 判断自身是否还是竞选者，且任期不冲突
 				if rf.status != Candidate || args.Term < rf.currentTerm {
 					rf.mu.Unlock()
