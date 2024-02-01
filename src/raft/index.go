@@ -1,6 +1,8 @@
 package raft
 
-import ()
+import (
+	"math"
+)
 
 // 日志条目
 type LogEntry struct {
@@ -19,7 +21,6 @@ func (rf *Raft) restoreLogTerm(curIndex int) int {
 	if curIndex-rf.lastIncludeIndex == 0 {
 		return rf.lastIncludeTerm
 	}
-	//fmt.Printf("[GET] curIndex:%v,rf.lastIncludeIndex:%v\n", curIndex, rf.lastIncludeIndex)
 	return rf.logs[curIndex-rf.lastIncludeIndex].Term
 }
 
@@ -53,6 +54,21 @@ func (rf *Raft) UpToDate(index int, term int) bool {
 	lastIndex := rf.getLastIndex()
 	lastTerm := rf.getLastTerm()
 	return term > lastTerm || (term == lastTerm && index >= lastIndex)
+}
+
+// 获取 endIndex 范围内, 任期为 term 且 index 最小的日志条目
+func (rf *Raft) getMinIndexInOneTerm(term int, endIndex int) (minIndex int) {
+	if term == 0 {
+		return 0
+	}
+	minIndex = math.MaxInt
+	for index := endIndex; index >= rf.lastIncludeIndex; index-- {
+		if rf.restoreLogTerm(index) != term {
+			minIndex = index + 1
+			break
+		}
+	}
+	return minIndex
 }
 
 func min(a, b int) int {

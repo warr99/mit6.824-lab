@@ -124,7 +124,7 @@ func (rf *Raft) leaderAppendEntries() {
 					}
 				} else {
 					// 追加日志发生冲突 -> 进行更新
-					Debug(dLog, "S%d <- S%d Inconsistent logs, need retry.", rf.me, server)
+					Debug(dLog, "S%d <- S%d Inconsistent logs, need retry. reset nextIndex=%d", rf.me, server, reply.UpNextIndex)
 					if reply.UpNextIndex != -1 {
 						rf.nextIndex[server] = reply.UpNextIndex
 					}
@@ -136,15 +136,6 @@ func (rf *Raft) leaderAppendEntries() {
 	}
 }
 
-// 返回假 如果领导人的任期小于接收者的当前任期（译者注：这里的接收者是指跟随者或者候选人）（5.1 节）
-// 返回假 如果接收者日志中没有包含这样一个条目 即该条目的任期在 prevLogIndex 上能和 prevLogTerm 匹配上
-//
-//	（译者注：在接收者日志中 如果能找到一个和 prevLogIndex 以及 prevLogTerm 一样的索引和任期的日志条目 则继续执行下面的步骤 否则返回假）（5.3 节）
-//
-// 如果一个已经存在的条目和新条目（译者注：即刚刚接收到的日志条目）发生了冲突（因为索引相同，任期不同），
-// 那么就删除这个已经存在的条目以及它之后的所有条目 （5.3 节）
-// 追加日志中尚未存在的任何新条目
-// 如果领导人的已知已提交的最高日志条目的索引大于接收者的已知已提交最高日志条目的索引（leaderCommit > commitIndex），则把接收者的已知已经提交的最高的日志条目的索引commitIndex 重置为 领导人的已知已经提交的最高的日志条目的索引 leaderCommit 或者是 上一个新条目的索引 取两者的最小值
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -183,15 +174,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else {
 		// 如果在 prevLogIndex 处的日志条目的 term 与 prevLogTerm 不匹配，那么回复 false (§5.3)
-		if rf.restoreLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
+		argsPrevLogIndexTerm := rf.restoreLogTerm(args.PrevLogIndex)
+		if argsPrevLogIndexTerm != args.PrevLogTerm {
 			reply.Success = false
-			tempTerm := rf.restoreLogTerm(args.PrevLogIndex)
-			for index := args.PrevLogIndex; index >= rf.lastIncludeIndex; index-- {
-				if rf.restoreLogTerm(index) != tempTerm {
-					reply.UpNextIndex = index + 1
-					break
-				}
-			}
+			// the follower can include the term of the conflicting entry and the first index it stores for that term.
+			// With this information, the leader can decrement nextIndex to bypass all of the conflicting entries in that term;
+			// one AppendEntries RPC will be required for each term with conflicting entries, rather than one RPC per entry.
+			reply.UpNextIndex = rf.getMinIndexInOneTerm(argsPrevLogIndexTerm, args.PrevLogIndex)
+			Debug(dLog2, "S%d The term of the log entry at prevLogIndex does not match prevLogTerm(%d != %d), reset UpNextIndex: %d",
+				rf.me, argsPrevLogIndexTerm, args.PrevLogTerm, reply.UpNextIndex)
 			return
 		}
 	}
@@ -203,9 +194,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.logs = append(rf.logs[:args.PrevLogIndex+1-rf.lastIncludeIndex], args.Entries...)
 	rf.persist()
 
-	//If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-	// commitIndex取leaderCommit与last new entry最小值的原因是，虽然应该更新到leaderCommit，但是new entry的下标更小
-	// 则说明日志不存在，更新commit的目的是为了applied log，这样会导致日志日志下标溢出
+	//update commitIndex
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.getLastIndex())
 	}
