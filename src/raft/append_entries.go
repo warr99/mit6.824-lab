@@ -116,8 +116,8 @@ func (rf *Raft) leaderAppendEntries() {
 
 						// 如果超过半数以上节点的匹配索引满足条件，且当前索引对应的任期与当前节点的任期相同
 						if sum >= len(rf.peers)/2+1 && rf.restoreLogTerm(index) == rf.currentTerm {
-							Debug(dCommit, "S%d Updated commitIndex at T%d for majority consensus. commitIndex: %d.", rf.me, rf.currentTerm, rf.commitIndex)
 							rf.commitIndex = index
+							Debug(dCommit, "S%d Updated commitIndex at T%d for majority consensus. commitIndex: %d.", rf.me, rf.currentTerm, rf.commitIndex)
 							break
 						}
 
@@ -139,7 +139,11 @@ func (rf *Raft) leaderAppendEntries() {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	Debug(dLog2, "S%d <- S%d Received append entries at T%d.", rf.me, args.LeaderId, rf.currentTerm)
+	if len(args.Entries) == 0 {
+		Debug(dLog2, "S%d <- S%d Received heartbeat at T%d.", rf.me, args.LeaderId, rf.currentTerm)
+	} else {
+		Debug(dLog2, "S%d <- S%d Received append entries at T%d.", rf.me, args.LeaderId, rf.currentTerm)
+	}
 	// Reply false if term < currentTerm (§5.1)
 	if args.Term < rf.currentTerm {
 		Debug(dLog2, "S%d Term is lower, rejecting append request. (%d < %d)", rf.me, args.Term, rf.currentTerm)
@@ -201,8 +205,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	Debug(dLog, "S%d -> S%d Leader send entries, PrevLogIndex:%d, PrevLogTerm:%d",
-		rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
+	if len(args.Entries) == 0 {
+		Debug(dLog, "S%d -> S%d Leader send heartbeat", rf.me, server)
+	} else {
+		Debug(dLog, "S%d -> S%d Leader send entries, PrevLogIndex:%d, PrevLogTerm:%d",
+			rf.me, server, args.PrevLogIndex, args.PrevLogTerm)
+	}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }

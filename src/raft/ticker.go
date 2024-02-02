@@ -42,7 +42,7 @@ func (rf *Raft) electionTicker() {
 			rf.voteNum = 1
 			rf.currentTerm += 1
 			rf.persist()
-
+			Debug(dTerm, "S%d Follower becomes Candidate and initiates elections, currentTerm:%d", rf.me, rf.currentTerm)
 			rf.sendElection()
 			rf.votedTimer = time.Now()
 
@@ -77,8 +77,10 @@ func (rf *Raft) committedTicker() {
 		}
 
 		Messages := make([]ApplyMsg, 0)
-		for rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.getLastIndex() {
+		for rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.getLastIndex() && !rf.killed() {
 			rf.lastApplied += 1
+			Debug(dCommit, "S%d put the committed entry to apply on the status machine, lastApplied:%d, Command:%d",
+				rf.me, rf.lastApplied, rf.restoreLog(rf.lastApplied).Command)
 			Messages = append(Messages, ApplyMsg{
 				CommandValid:  true,
 				SnapshotValid: false,

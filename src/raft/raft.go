@@ -124,9 +124,7 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data)
 }
 
-//
 // restore previously persisted status.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any status?
 		return
@@ -179,6 +177,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	} else {
 		index := rf.getLastIndex() + 1
 		term := rf.currentTerm
+		Debug(dClient, "S%d appped logEntry,index:%d, term:%d, command:%d", rf.me, index, term, command)
 		rf.logs = append(rf.logs, LogEntry{Term: term, Command: command})
 		rf.persist()
 		return index, term, true
@@ -196,6 +195,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	Debug(dClient, "S%d Current client is exiting.", rf.me)
 }
 
 func (rf *Raft) killed() bool {
