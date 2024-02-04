@@ -159,7 +159,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.status = Follower
 	rf.currentTerm = args.Term
-	rf.votedFor = -1
 	rf.voteNum = 0
 	rf.persist()
 	rf.votedTimer = time.Now()

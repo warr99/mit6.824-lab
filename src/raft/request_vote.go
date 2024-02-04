@@ -108,17 +108,14 @@ func (rf *Raft) sendElection() {
 
 // RequestVote
 // example RequestVote RPC handler.
-// 个人认为定时刷新的地方应该是别的节点与当前节点在数据上不冲突时才要刷新
-// 因为如果不是数据冲突那么定时相当于防止自身去选举的一个心跳
-// 如果是因为数据冲突，那么这个节点不用刷新定时是为了当前整个raft能尽快有个正确的leader
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	Debug(dVote, "S%d <- S%d Received vote request at T%d.", rf.me, args.CandidateId, rf.currentTerm)
 	// 由于网络分区或者是节点crash，导致的任期比接收者还小，直接返回
-	if args.Term <= rf.currentTerm {
-		Debug(dVote, "S%d Term is lower, rejecting the vote. (%d < %d)", rf.me, args.Term, rf.currentTerm)
+	if args.Term < rf.currentTerm {
+		Debug(dVote, "S%d Candidate's Term is lower, rejecting the vote. (%d < %d)", rf.me, args.Term, rf.currentTerm)
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -152,7 +149,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.currentTerm
 		return
 	} else {
-		Debug(dVote, "S%d Granting vote to S%d at T%d.", rf.me, args.CandidateId, args.Term)
+		Debug(dVote, "S%d Granting vote to S%d at T%d, votedFor:%d.", rf.me, args.CandidateId, args.Term, args.CandidateId)
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
