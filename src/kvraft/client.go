@@ -1,8 +1,10 @@
 package kvraft
 
-import "6.5840/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"6.5840/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -25,7 +27,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.clientId = nrand()
-	ck.leaderId = -1
+	ck.leaderId = 0
 	ck.seqId = -1
 	return ck
 }
@@ -56,6 +58,34 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.seqId++
+	serverId := ck.leaderId
+	args := PutAppendArgs{
+		clientId: ck.clientId,
+		op:       op,
+		seqId:    ck.seqId,
+		key:      key,
+		value:    value,
+	}
+	for {
+		reply := PutAppendReply{}
+		Debug(dClient, "S%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
+		ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
+		if ok {
+			if reply.Err == OK {
+				Debug(dClient, "S%d <- S%d Received putAppend reply, confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				ck.leaderId = serverId
+				return
+			} else if reply.Err == ErrWrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				Debug(dClient, "S%d <- S%d Received putAppend reply, change LeaderId:", ck.clientId, ck.leaderId, serverId)
+				continue
+			}
+		} else {
+			Debug(dClient, "S%d <- S%d No response received, change LeaderId:", ck.clientId, ck.leaderId, serverId)
+			serverId = (serverId + 1) % len(ck.servers)
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
