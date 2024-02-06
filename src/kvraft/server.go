@@ -24,8 +24,10 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	seqMap       map[int64]int   //为了确保seq只执行一次	clientId / seqId
+	waitChMap    map[int]chan Op //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
+	stateMachine KVStateMachine  // KV stateMachine
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
@@ -53,6 +55,8 @@ func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
 }
+
+func (kv *KVServer) applyMsgHandlerLoop() {}
 
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -82,5 +86,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
+	kv.seqMap = make(map[int64]int)
+	kv.stateMachine = NewMemoryKV()
+	kv.waitChMap = make(map[int]chan Op)
+
+	go kv.applyMsgHandlerLoop()
 	return kv
 }
