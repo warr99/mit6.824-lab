@@ -4,10 +4,12 @@ import "6.5840/labrpc"
 import "crypto/rand"
 import "math/big"
 
-
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leaderId int   // 领导者节点id
+	clientId int64 // 当前客户端id
+	seqId    int   // 操作序列号
 }
 
 func nrand() int64 {
@@ -17,10 +19,14 @@ func nrand() int64 {
 	return x
 }
 
+// init Clerk
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.leaderId = -1
+	ck.seqId = -1
 	return ck
 }
 
