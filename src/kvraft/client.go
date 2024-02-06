@@ -1,9 +1,10 @@
 package kvraft
 
 import (
+	"6.5840/labrpc"
 	"crypto/rand"
 	"math/big"
-	"6.5840/labrpc"
+	"sync/atomic"
 )
 
 type Clerk struct {
@@ -11,7 +12,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 	leaderId int   // 领导者节点id
 	clientId int64 // 当前客户端id
-	seqId    int   // 操作序列号
+	seqId    int64 // 操作序列号
 }
 
 func nrand() int64 {
@@ -43,9 +44,34 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-
 	// You will have to modify this function.
-	return ""
+	atomic.AddInt64(&ck.seqId, 1)
+	serverId := ck.leaderId
+	args := GetArgs{
+		seqId: ck.seqId,
+		Key:   key,
+	}
+	for {
+		reply := GetReply{}
+		Debug(dClient, "S%d -> S%d send Get, seqId:%d", ck.clientId, serverId, ck.seqId)
+		ok := ck.servers[serverId].Call("KVServer.Get", &args, &reply)
+		if ok {
+			if reply.Err == ErrNoKey {
+				ck.leaderId = serverId
+				Debug(dClient, "S%d <- S%d Received Get reply (NoKey), confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				return ""
+			} else if reply.Err == OK {
+				ck.leaderId = serverId
+				Debug(dClient, "S%d <- S%d Received Get reply (OK), confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				return reply.Value
+			} else if reply.Err == ErrWrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				Debug(dClient, "S%d <- S%d Received Get reply (WrongLeader), change LeaderId:", ck.clientId, ck.leaderId, serverId)
+				continue
+			}
+		}
+		serverId = (serverId + 1) % len(ck.servers)
+	}
 }
 
 // shared by Put and Append.
@@ -58,7 +84,7 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	ck.seqId++
+	atomic.AddInt64(&ck.seqId, 1)
 	serverId := ck.leaderId
 	args := PutAppendArgs{
 		clientId: ck.clientId,
