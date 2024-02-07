@@ -48,7 +48,7 @@ func (ck *Clerk) Get(key string) string {
 	atomic.AddInt64(&ck.seqId, 1)
 	serverId := ck.leaderId
 	args := GetArgs{
-		seqId: ck.seqId,
+		SeqId: ck.seqId,
 		Key:   key,
 	}
 	for {
@@ -82,20 +82,20 @@ func (ck *Clerk) Get(key string) string {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-func (ck *Clerk) PutAppend(key string, value string, op string) {
+func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 	// You will have to modify this function.
 	atomic.AddInt64(&ck.seqId, 1)
 	serverId := ck.leaderId
 	args := PutAppendArgs{
-		clientId: ck.clientId,
-		op:       op,
-		seqId:    ck.seqId,
-		key:      key,
-		value:    value,
+		ClientId: ck.clientId,
+		Op:       op,
+		SeqId:    ck.seqId,
+		Key:      key,
+		Value:    value,
 	}
 	for {
 		reply := PutAppendReply{}
-		Debug(dClient, "S%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
+		Debug(dClient, "C%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
 		ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
 			if reply.Err == OK {
@@ -115,8 +115,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, PutOp)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, AppendOp)
 }

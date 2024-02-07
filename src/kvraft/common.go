@@ -10,11 +10,11 @@ type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	clientId int64  // 客户端id
-	op       string // "Put" or "Append"
-	seqId    int64  // 序列号
-	key      string // 键
-	value    string // 值
+	ClientId int64  // 客户端id
+	Op       OpType // "Put" or "Append"
+	SeqId    int64  // 序列号
+	Key      string // 键
+	Value    string // 值
 }
 
 type PutAppendReply struct {
@@ -24,7 +24,8 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
-	seqId int64 // 序列号
+	SeqId int64 // 序列号
+	ClientId int64
 }
 
 type GetReply struct {
