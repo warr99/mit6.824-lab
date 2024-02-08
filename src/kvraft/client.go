@@ -50,26 +50,28 @@ func (ck *Clerk) Get(key string) string {
 	args := GetArgs{
 		SeqId: ck.seqId,
 		Key:   key,
+		ClientId: ck.clientId,
 	}
 	for {
 		reply := GetReply{}
-		Debug(dClient, "S%d -> S%d send Get, seqId:%d", ck.clientId, serverId, ck.seqId)
+		DPrintf("C%d -> S%d send Get, seqId:%d", ck.clientId, serverId, ck.seqId)
 		ok := ck.servers[serverId].Call("KVServer.Get", &args, &reply)
 		if ok {
 			if reply.Err == ErrNoKey {
 				ck.leaderId = serverId
-				Debug(dClient, "S%d <- S%d Received Get reply (NoKey), confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				DPrintf("C%d <- S%d Received Get reply (NoKey), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				return ""
 			} else if reply.Err == OK {
 				ck.leaderId = serverId
-				Debug(dClient, "S%d <- S%d Received Get reply (OK), confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				DPrintf("C%d <- S%d Received Get reply (OK), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				return reply.Value
 			} else if reply.Err == ErrWrongLeader {
 				serverId = (serverId + 1) % len(ck.servers)
-				Debug(dClient, "S%d <- S%d Received Get reply (WrongLeader), change LeaderId:", ck.clientId, ck.leaderId, serverId)
+				DPrintf("C%d <- S%d Received Get reply (WrongLeader), change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				continue
 			}
 		}
+		DPrintf("C%d <- S%d No Get response received, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 		serverId = (serverId + 1) % len(ck.servers)
 	}
 }
@@ -95,20 +97,20 @@ func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 	}
 	for {
 		reply := PutAppendReply{}
-		Debug(dClient, "C%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
+		DPrintf("C%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
 		ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
 			if reply.Err == OK {
-				Debug(dClient, "S%d <- S%d Received putAppend reply, confirm LeaderId:", ck.clientId, ck.leaderId, serverId)
+				DPrintf("C%d <- S%d Received putAppend reply, confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				ck.leaderId = serverId
 				return
 			} else if reply.Err == ErrWrongLeader {
 				serverId = (serverId + 1) % len(ck.servers)
-				Debug(dClient, "S%d <- S%d Received putAppend reply, change LeaderId:", ck.clientId, ck.leaderId, serverId)
+				DPrintf("C%d <- S%d Received putAppend reply, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				continue
 			}
 		} else {
-			Debug(dClient, "S%d <- S%d No response received, change LeaderId:", ck.clientId, ck.leaderId, serverId)
+			DPrintf("C%d <- S%d No PutAppend response received, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 			serverId = (serverId + 1) % len(ck.servers)
 		}
 	}

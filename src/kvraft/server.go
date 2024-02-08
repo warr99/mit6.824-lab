@@ -69,17 +69,21 @@ func (kv *KVServer) isDuplicate(clientId int64, seqId int64) bool {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	DPrintf("S%d <- C%d Received Get Req", kv.me, args.ClientId)
 	if kv.killed() {
+		DPrintf("S%d -> C%d send Get reply, ErrWrongLeader", kv.me, args.ClientId)
 		reply.Err = ErrWrongLeader
 		return
 	}
 
 	_, ifLeader := kv.rf.GetState()
 	if !ifLeader {
+		DPrintf("S%d -> C%d send Get reply, ErrWrongLeader", kv.me, args.ClientId)
 		reply.Err = ErrWrongLeader
 		return
 	}
 	op := Op{OpType: GetOp, Key: args.Key, SeqId: args.SeqId, ClientId: args.ClientId}
+	DPrintf("S%d send Get to Raft Code", kv.me)
 	index, _, _ := kv.rf.Start(op)
 	ch := kv.getWaitCh(index)
 	defer func() {
@@ -94,15 +98,19 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	select {
 	case replyOp := <-ch:
+		DPrintf("S%d Received Raft Code resp", kv.me)
 		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
+			DPrintf("S%d Received Raft Code Get resp, ErrWrongLeader", kv.me)
 			reply.Err = ErrWrongLeader
 		} else {
 			kv.mu.Lock()
+			DPrintf("S%d Received Raft Code resp, OK, get val from stateMachine", kv.me)
 			reply.Value, reply.Err = kv.stateMachine.Get(op.Key)
 			kv.mu.Unlock()
 			return
 		}
 	case <-timer.C:
+		DPrintf("S%d Timeout, ErrWrongLeader", kv.me)
 		reply.Err = ErrWrongLeader
 	}
 
@@ -127,6 +135,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Value:    args.Value,
 		SeqId:    args.SeqId,
 		ClientId: args.ClientId}
+	DPrintf("S%d send Put/Append to Raft Code", kv.me)
 	index, _, _ := kv.rf.Start(op)
 
 	ch := kv.getWaitCh(index)
@@ -142,8 +151,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	select {
 	case replyOp := <-ch:
 		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
+			DPrintf("S%d Received Raft Code Put/Append resp, ErrWrongLeader", kv.me)
 			reply.Err = ErrWrongLeader
 		} else {
+			DPrintf("S%d Received Raft Code Put/Append resp, OK", kv.me)
 			reply.Err = OK
 		}
 
@@ -178,18 +189,23 @@ func (kv *KVServer) applyMsgHandlerLoop() {
 			return
 		}
 		msg := <-kv.applyCh
+		DPrintf("S%d Received Raft Code commit msg", kv.me)
 		index := msg.CommandIndex
 		op := msg.Command.(Op)
 		if !kv.isDuplicate(op.ClientId, op.SeqId) {
 			kv.mu.Lock()
 			switch op.OpType {
 			case PutOp:
+				DPrintf("S%d handler Raft Code Put applyMsg, Put val to stateMachine", kv.me)
 				kv.stateMachine.Put(op.Key, op.Value)
 			case AppendOp:
+				DPrintf("S%d handler Raft Code Append applyMsg, Append val to stateMachine", kv.me)
 				kv.stateMachine.Append(op.Key, op.Value)
 			}
 			kv.seqMap[op.ClientId] = op.SeqId
 			kv.mu.Unlock()
+		} else {
+			DPrintf("S%d applyMsg is duplicate, op.ClientId:%d, op.SeqId:%d", kv.me, op.ClientId, op.SeqId)
 		}
 		// 通知可能正在等待该操作结果的客户端
 		kv.getWaitCh(index) <- op
