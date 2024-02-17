@@ -30,6 +30,11 @@ type Op struct {
 	ClientId int64
 }
 
+type IndexAndTerm struct {
+	Index int
+	Term  int
+}
+
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -40,18 +45,18 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	seqMap       map[int64]int64 //为了确保seq只执行一次	clientId / seqId
-	waitChMap    map[int]chan Op //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
-	stateMachine KVStateMachine  // KV stateMachine
+	seqMap       map[int64]int64          //为了确保seq只执行一次	clientId / seqId
+	waitChMap    map[IndexAndTerm]chan Op //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
+	stateMachine KVStateMachine           // KV stateMachine
 }
 
-func (kv *KVServer) getWaitCh(index int) chan Op {
+func (kv *KVServer) getWaitCh(IndexAndTerm IndexAndTerm) chan Op {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	ch, exist := kv.waitChMap[index]
+	ch, exist := kv.waitChMap[IndexAndTerm]
 	if !exist {
-		kv.waitChMap[index] = make(chan Op, 1)
-		ch = kv.waitChMap[index]
+		kv.waitChMap[IndexAndTerm] = make(chan Op, 1)
+		ch = kv.waitChMap[IndexAndTerm]
 	}
 	return ch
 }
@@ -84,11 +89,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 	op := Op{OpType: GetOp, Key: args.Key, SeqId: args.SeqId, ClientId: args.ClientId}
 	DPrintf("S%d send Get to Raft Code", kv.me)
-	index, _, _ := kv.rf.Start(op)
-	ch := kv.getWaitCh(index)
+	index, term, _ := kv.rf.Start(op)
+	indexAndTerm := IndexAndTerm{index, term}
+	ch := kv.getWaitCh(indexAndTerm)
 	defer func() {
 		kv.mu.Lock()
-		delete(kv.waitChMap, index)
+		delete(kv.waitChMap, indexAndTerm)
 		kv.mu.Unlock()
 	}()
 
@@ -136,12 +142,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		SeqId:    args.SeqId,
 		ClientId: args.ClientId}
 	DPrintf("S%d send Put/Append to Raft Code", kv.me)
-	index, _, _ := kv.rf.Start(op)
-
-	ch := kv.getWaitCh(index)
+	index, term, _ := kv.rf.Start(op)
+	indexAndTerm := IndexAndTerm{index, term}
+	ch := kv.getWaitCh(indexAndTerm)
 	defer func() {
 		kv.mu.Lock()
-		delete(kv.waitChMap, index)
+		delete(kv.waitChMap, indexAndTerm)
 		kv.mu.Unlock()
 	}()
 
@@ -191,24 +197,36 @@ func (kv *KVServer) applyMsgHandlerLoop() {
 		msg := <-kv.applyCh
 		DPrintf("S%d Received Raft Code commit msg", kv.me)
 		index := msg.CommandIndex
+		term, _ := kv.rf.GetState()
+		indexAndTerm := IndexAndTerm{index, term}
 		op := msg.Command.(Op)
 		if !kv.isDuplicate(op.ClientId, op.SeqId) {
 			kv.mu.Lock()
 			switch op.OpType {
 			case PutOp:
-				DPrintf("S%d handler Raft Code Put applyMsg, Put val to stateMachine", kv.me)
+				DPrintf("S%d handle Raft Code Put applyMsg, Put val to stateMachine", kv.me)
 				kv.stateMachine.Put(op.Key, op.Value)
 			case AppendOp:
-				DPrintf("S%d handler Raft Code Append applyMsg, Append val to stateMachine", kv.me)
+				DPrintf("S%d handle Raft Code Append applyMsg, Append val to stateMachine", kv.me)
 				kv.stateMachine.Append(op.Key, op.Value)
 			}
+			DPrintf("S%d handle op, put into seqMap kv.seqMap[%d] = %d",
+				kv.me,
+				op.ClientId,
+				op.SeqId)
 			kv.seqMap[op.ClientId] = op.SeqId
 			kv.mu.Unlock()
 		} else {
-			DPrintf("S%d applyMsg is duplicate, op.ClientId:%d, op.SeqId:%d", kv.me, op.ClientId, op.SeqId)
+			kv.mu.Lock()
+			DPrintf("S%d applyMsg is duplicate, op.ClientId:%d, op.SeqId:%d, lastSeqId:%d",
+				kv.me,
+				op.ClientId,
+				op.SeqId,
+				kv.seqMap[op.ClientId])
+			kv.mu.Unlock()
 		}
 		// 通知可能正在等待该操作结果的客户端
-		kv.getWaitCh(index) <- op
+		kv.getWaitCh(indexAndTerm) <- op
 	}
 }
 
@@ -242,7 +260,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.seqMap = make(map[int64]int64)
 	kv.stateMachine = NewMemoryKV()
-	kv.waitChMap = make(map[int]chan Op)
+	kv.waitChMap = make(map[IndexAndTerm]chan Op)
 
 	go kv.applyMsgHandlerLoop()
 	return kv
