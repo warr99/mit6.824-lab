@@ -48,8 +48,8 @@ func (ck *Clerk) Get(key string) string {
 	atomic.AddInt64(&ck.seqId, 1)
 	serverId := ck.leaderId
 	args := GetArgs{
-		SeqId: ck.seqId,
-		Key:   key,
+		SeqId:    ck.seqId,
+		Key:      key,
 		ClientId: ck.clientId,
 	}
 	for {
@@ -61,6 +61,10 @@ func (ck *Clerk) Get(key string) string {
 				ck.leaderId = serverId
 				DPrintf("C%d <- S%d Received Get reply (NoKey), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				return ""
+			} else if reply.Err == TimeOut {
+				ck.leaderId = serverId
+				DPrintf("C%d <- S%d Received Get reply (TimeOut), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
+				continue
 			} else if reply.Err == OK {
 				ck.leaderId = serverId
 				DPrintf("C%d <- S%d Received Get reply (OK), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
@@ -104,6 +108,10 @@ func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 				DPrintf("C%d <- S%d Received putAppend reply, confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				ck.leaderId = serverId
 				return
+			} else if reply.Err == TimeOut {
+				ck.leaderId = serverId
+				DPrintf("C%d <- S%d Received putAppend reply (TimeOut), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
+				continue
 			} else if reply.Err == ErrWrongLeader {
 				serverId = (serverId + 1) % len(ck.servers)
 				DPrintf("C%d <- S%d Received putAppend reply, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)

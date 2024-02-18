@@ -11,7 +11,7 @@ import (
 
 type OpType string
 
-const timeOut time.Duration = 100 //超时时间(s)
+const timeOut = 100 * time.Millisecond
 
 const (
 	GetOp    OpType = "Get"
@@ -28,11 +28,17 @@ type Op struct {
 	Value    string
 	SeqId    int64
 	ClientId int64
+	Err      Err
 }
 
 type IndexAndTerm struct {
 	Index int
 	Term  int
+}
+
+type CommandResponse struct {
+	Err   Err
+	Value string
 }
 
 type KVServer struct {
@@ -44,27 +50,24 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
+	lastApplied int
+
 	// Your definitions here.
-	seqMap       map[int64]int64          //为了确保seq只执行一次	clientId / seqId
-	waitChMap    map[IndexAndTerm]chan Op //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
-	stateMachine KVStateMachine           // KV stateMachine
+	seqMap       map[int64]int64                       //为了确保seq只执行一次	clientId / seqId
+	waitChMap    map[IndexAndTerm]chan CommandResponse //传递由下层Raft服务的appCh传过来的command	index / chan(Op)
+	stateMachine KVStateMachine                        // KV stateMachine
 }
 
-func (kv *KVServer) getWaitCh(IndexAndTerm IndexAndTerm) chan Op {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+func (kv *KVServer) getWaitCh(IndexAndTerm IndexAndTerm) chan CommandResponse {
 	ch, exist := kv.waitChMap[IndexAndTerm]
 	if !exist {
-		kv.waitChMap[IndexAndTerm] = make(chan Op, 1)
+		kv.waitChMap[IndexAndTerm] = make(chan CommandResponse, 1)
 		ch = kv.waitChMap[IndexAndTerm]
 	}
 	return ch
 }
 
 func (kv *KVServer) isDuplicate(clientId int64, seqId int64) bool {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	lastSeqId, exist := kv.seqMap[clientId]
 	if !exist {
 		return false
@@ -73,101 +76,60 @@ func (kv *KVServer) isDuplicate(clientId int64, seqId int64) bool {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	DPrintf("S%d <- C%d Received Get Req", kv.me, args.ClientId)
-	if kv.killed() {
-		DPrintf("S%d -> C%d send Get reply, ErrWrongLeader", kv.me, args.ClientId)
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	_, ifLeader := kv.rf.GetState()
-	if !ifLeader {
-		DPrintf("S%d -> C%d send Get reply, ErrWrongLeader", kv.me, args.ClientId)
-		reply.Err = ErrWrongLeader
-		return
-	}
-	op := Op{OpType: GetOp, Key: args.Key, SeqId: args.SeqId, ClientId: args.ClientId}
-	DPrintf("S%d send Get to Raft Code", kv.me)
-	index, term, _ := kv.rf.Start(op)
-	indexAndTerm := IndexAndTerm{index, term}
-	ch := kv.getWaitCh(indexAndTerm)
-	defer func() {
-		kv.mu.Lock()
-		delete(kv.waitChMap, indexAndTerm)
-		kv.mu.Unlock()
-	}()
-
-	// 设置超时ticker
-	timer := time.NewTicker(timeOut * time.Millisecond)
-	defer timer.Stop()
-
-	select {
-	case replyOp := <-ch:
-		DPrintf("S%d Received Raft Code resp", kv.me)
-		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
-			DPrintf("S%d Received Raft Code Get resp, ErrWrongLeader", kv.me)
-			reply.Err = ErrWrongLeader
-		} else {
-			kv.mu.Lock()
-			DPrintf("S%d Received Raft Code resp, OK, get val from stateMachine", kv.me)
-			reply.Value, reply.Err = kv.stateMachine.Get(op.Key)
-			kv.mu.Unlock()
-			return
-		}
-	case <-timer.C:
-		DPrintf("S%d Timeout, ErrWrongLeader", kv.me)
-		reply.Err = ErrWrongLeader
-	}
-
+	cmd := Op{OpType: GetOp,
+		Key:      args.Key,
+		SeqId:    args.SeqId,
+		ClientId: args.ClientId}
+	reply.Err, reply.Value = kv.clientRequestProcessHandler(cmd)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	if kv.killed() {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	op := Op{
+	cmd := Op{
 		OpType:   OpType(args.Op),
 		Key:      args.Key,
 		Value:    args.Value,
 		SeqId:    args.SeqId,
 		ClientId: args.ClientId}
-	DPrintf("S%d send Put/Append to Raft Code", kv.me)
-	index, term, _ := kv.rf.Start(op)
-	indexAndTerm := IndexAndTerm{index, term}
-	ch := kv.getWaitCh(indexAndTerm)
+	reply.Err, _ = kv.clientRequestProcessHandler(cmd)
+}
+
+func (kv *KVServer) clientRequestProcessHandler(cmd Op) (Err, string) {
+	kv.mu.Lock()
+	if cmd.OpType != GetOp && kv.isDuplicate(cmd.ClientId, cmd.SeqId) {
+		DPrintf("S%d cmd is duplicate, ClientId:%d, SeqId:%d, lastSeqId:%d",
+			kv.me,
+			cmd.ClientId,
+			cmd.SeqId,
+			kv.seqMap[cmd.ClientId])
+		kv.mu.Unlock()
+		return OK, ""
+	}
+
+	kv.mu.Unlock()
+	index, term, isLeader := kv.rf.Start(cmd)
+	if !isLeader {
+		DPrintf("S%d is not Leader", kv.me)
+		return ErrWrongLeader, ""
+	}
+
+	it := IndexAndTerm{index, term}
+	kv.mu.Lock()
+	ch := kv.getWaitCh(it)
+	kv.mu.Unlock()
+
 	defer func() {
 		kv.mu.Lock()
-		delete(kv.waitChMap, indexAndTerm)
+		delete(kv.waitChMap, it)
 		kv.mu.Unlock()
 	}()
 
-	timer := time.NewTicker(timeOut * time.Millisecond)
-	defer timer.Stop()
-
 	select {
-	case replyOp := <-ch:
-		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
-			DPrintf("S%d Received Raft Code Put/Append resp, ErrWrongLeader", kv.me)
-			reply.Err = ErrWrongLeader
-		} else {
-			DPrintf("S%d Received Raft Code Put/Append resp, OK", kv.me)
-			reply.Err = OK
-		}
-
-	case <-timer.C:
-		reply.Err = ErrWrongLeader
+	case response := <-ch:
+		return response.Err, response.Value
+	case <-time.After(timeOut):
+		DPrintf("S%d Raft Code handle cmd timeout", kv.me)
+		return TimeOut, ""
 	}
-
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -189,44 +151,45 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-func (kv *KVServer) applyMsgHandlerLoop() {
-	for {
-		if kv.killed() {
-			return
-		}
-		msg := <-kv.applyCh
-		DPrintf("S%d Received Raft Code commit msg", kv.me)
-		index := msg.CommandIndex
-		term, _ := kv.rf.GetState()
-		indexAndTerm := IndexAndTerm{index, term}
-		op := msg.Command.(Op)
-		if !kv.isDuplicate(op.ClientId, op.SeqId) {
-			kv.mu.Lock()
-			switch op.OpType {
-			case PutOp:
-				DPrintf("S%d handle Raft Code Put applyMsg, Put val to stateMachine", kv.me)
-				kv.stateMachine.Put(op.Key, op.Value)
-			case AppendOp:
-				DPrintf("S%d handle Raft Code Append applyMsg, Append val to stateMachine", kv.me)
-				kv.stateMachine.Append(op.Key, op.Value)
+func (kv *KVServer) applyOp() {
+	for !kv.killed() {
+		for m := range kv.applyCh {
+			if m.CommandValid {
+				kv.mu.Lock()
+				if m.CommandIndex <= kv.lastApplied {
+					kv.mu.Unlock()
+					continue
+				}
+
+				op := m.Command.(Op)
+				kv.lastApplied = m.CommandIndex
+
+				var response CommandResponse
+				if op.OpType != GetOp && kv.isDuplicate(op.ClientId, op.SeqId) {
+					DPrintf("S%d op has been processed,SeqId:%d", kv.me, op.SeqId)
+					response = CommandResponse{OK, ""}
+				} else {
+					kv.seqMap[op.ClientId] = op.SeqId
+					switch op.OpType {
+					case PutOp:
+						DPrintf("S%d handle Raft Code Put applyMsg, Put val to stateMachine", kv.me)
+						response.Err = kv.stateMachine.Put(op.Key, op.Value)
+					case AppendOp:
+						DPrintf("S%d handle Raft Code Append applyMsg, Append val to stateMachine", kv.me)
+						response.Err = kv.stateMachine.Append(op.Key, op.Value)
+					case GetOp:
+						DPrintf("S%d handle Raft Code Get applyMsg, Get val to stateMachine", kv.me)
+						response.Value, response.Err = kv.stateMachine.Get(op.Key)
+					}
+				}
+				if currentTerm, isLeader := kv.rf.GetState(); isLeader {
+					DPrintf("ChanRespone Command:%v Response:%v commitIndex:%v currentTerm: %v", op, response, m.CommandIndex, currentTerm)
+					ch := kv.getWaitCh(IndexAndTerm{m.CommandIndex, currentTerm})
+					ch <- response
+				}
+				kv.mu.Unlock()
 			}
-			DPrintf("S%d handle op, put into seqMap kv.seqMap[%d] = %d",
-				kv.me,
-				op.ClientId,
-				op.SeqId)
-			kv.seqMap[op.ClientId] = op.SeqId
-			kv.mu.Unlock()
-		} else {
-			kv.mu.Lock()
-			DPrintf("S%d applyMsg is duplicate, op.ClientId:%d, op.SeqId:%d, lastSeqId:%d",
-				kv.me,
-				op.ClientId,
-				op.SeqId,
-				kv.seqMap[op.ClientId])
-			kv.mu.Unlock()
 		}
-		// 通知可能正在等待该操作结果的客户端
-		kv.getWaitCh(indexAndTerm) <- op
 	}
 }
 
@@ -253,6 +216,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
+	kv.lastApplied = -1
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
@@ -260,8 +224,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.seqMap = make(map[int64]int64)
 	kv.stateMachine = NewMemoryKV()
-	kv.waitChMap = make(map[IndexAndTerm]chan Op)
+	kv.waitChMap = make(map[IndexAndTerm]chan CommandResponse)
 
-	go kv.applyMsgHandlerLoop()
+	go kv.applyOp()
 	return kv
 }
