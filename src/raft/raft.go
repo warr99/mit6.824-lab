@@ -180,7 +180,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Debug(dClient, "S%d appped logEntry,index:%d, term:%d, command:%d", rf.me, index, term, command)
 		rf.logs = append(rf.logs, LogEntry{Term: term, Command: command})
 		rf.persist()
-		rf.leaderAppendEntries()
 		return index, term, true
 	}
 }

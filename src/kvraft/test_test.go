@@ -10,6 +10,7 @@ import "strings"
 import "sync"
 import "sync/atomic"
 import "fmt"
+import "runtime"
 import "io/ioutil"
 
 // The tester generously allows solutions to complete elections in one second
@@ -432,8 +433,68 @@ func TestSpeed3A(t *testing.T) {
 }
 
 func TestConcurrent3A(t *testing.T) {
+	// 在测试开始之前，启动goroutine监控
+	go monitorGoroutines()
+
 	// Test: many clients (3A) ...
 	GenericTest(t, "3A", 5, 5, false, false, false, -1, false)
+}
+
+func monitorGoroutines() {
+	for {
+		// 获取goroutine的数量
+		numGoroutines := runtime.NumGoroutine()
+
+		// 打印goroutine数量和创建位置的调用栈
+		fmt.Printf("curr goroutine num:%d\n", numGoroutines)
+		printGoroutineStack()
+
+		// 立即进行分析
+		analyzeGoroutineCreation()
+
+		// 等待一段时间
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func analyzeGoroutineCreation() {
+	buf := make([]byte, 1<<16)
+	stackLen := runtime.Stack(buf, true)
+
+	// 将字节切片转换为字符串
+	stackInfo := string(buf[:stackLen])
+
+	// 分析调用栈信息
+	goroutines := strings.Split(stackInfo, "goroutine ")
+	counts := make(map[string]int)
+
+	// 统计每个创建位置的goroutine数量
+	for _, goroutine := range goroutines {
+		lines := strings.Split(goroutine, "\n")
+		if len(lines) > 1 {
+			creationLocation := lines[1] // 第二行包含创建位置信息
+			counts[creationLocation]++
+		}
+	}
+
+	// 找出创建goroutine最多的位置
+	maxCount := 0
+	maxLocation := ""
+	for location, count := range counts {
+		if count > maxCount {
+			maxCount = count
+			maxLocation = location
+		}
+	}
+
+	// 打印结果
+	fmt.Printf("创建goroutine最多的位置:%s,创建数量:%d\n", maxLocation, maxCount)
+}
+
+func printGoroutineStack() {
+	buf := make([]byte, 1<<16)
+	stackLen := runtime.Stack(buf, true)
+	fmt.Printf("goroutine Call stack:\n%s\n", buf[:stackLen])
 }
 
 func TestUnreliable3A(t *testing.T) {
