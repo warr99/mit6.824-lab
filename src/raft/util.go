@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -71,4 +72,38 @@ func Debug(topic logTopic, format string, a ...interface{}) {
 		format = prefix + format
 		log.Printf(format, a...)
 	}
+}
+
+func beforeLock(id int64, funName string, rf int) {
+	fmt.Printf("[%d] [%v] S%d Try to get lock\n", id, funName, rf)
+}
+
+func afterLock(id int64, funName string, startGetLockTime time.Time, rf int) {
+	fmt.Printf("[%d] [%v] S%d Time to acquire lock: %v\n", id, funName, rf, time.Since(startGetLockTime))
+}
+
+func afterUnlock(id int64, funName string, startHoldLockTime time.Time, rf int) {
+	fmt.Printf("[%d] [%v] S%d Time to hold lock: %v\n", id, funName, rf, time.Since(startHoldLockTime))
+}
+
+// 获取goroutine的ID
+func getGID() int64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	id := parseGID(buf[:n])
+	return id
+}
+
+// 解析goroutine的ID
+func parseGID(stack []byte) int64 {
+	const prefix = "goroutine "
+	stack = stack[len(prefix):]
+	for i, b := range stack {
+		if b < '0' || b > '9' {
+			stack = stack[:i]
+			break
+		}
+	}
+	id, _ := strconv.ParseInt(string(stack), 10, 64)
+	return id
 }

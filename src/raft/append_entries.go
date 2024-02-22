@@ -137,8 +137,16 @@ func (rf *Raft) leaderAppendEntries() {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// gid := getGID()
+	// beforeLock(gid, "AppendEntries", rf.me)
+	// startGetLockTime := time.Now()
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// afterLock(gid, "AppendEntries", startGetLockTime, rf.me)
+	// startHoldLockTime := time.Now()
+	defer func() {
+		// afterUnlock(gid, "AppendEntries", startHoldLockTime, rf.me)
+		rf.mu.Unlock()
+	}()
 	if len(args.Entries) == 0 {
 		Debug(dLog2, "S%d <- S%d Received heartbeat at T%d.", rf.me, args.LeaderId, rf.currentTerm)
 	} else {
