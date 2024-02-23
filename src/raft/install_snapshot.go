@@ -97,9 +97,10 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	index := args.LastIncludeIndex
 	tempLog := make([]LogEntry, 0)
 	tempLog = append(tempLog, LogEntry{})
-	
+
 	for i := index + 1; i <= rf.getLastIndex(); i++ {
-		tempLog = append(tempLog, rf.restoreLog(i))
+		restoredLogEntry, _ := rf.restoreLog(i)
+		tempLog = append(tempLog, restoredLogEntry)
 	}
 	rf.logs = tempLog
 	rf.lastIncludeTerm = args.LastIncludeTerm
@@ -156,7 +157,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	sLogs := make([]LogEntry, 0)
 	sLogs = append(sLogs, LogEntry{})
 	for i := index + 1; i <= rf.getLastIndex(); i++ {
-		sLogs = append(sLogs, rf.restoreLog(i))
+		restoredLogEntry, _ := rf.restoreLog(i)
+		sLogs = append(sLogs, restoredLogEntry)
 	}
 
 	// 更新快照下标/任期

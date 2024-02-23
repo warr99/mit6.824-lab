@@ -11,8 +11,12 @@ type LogEntry struct {
 }
 
 // 通过快照偏移还原真实日志条目
-func (rf *Raft) restoreLog(curIndex int) LogEntry {
-	return rf.logs[curIndex-rf.lastIncludeIndex]
+func (rf *Raft) restoreLog(curIndex int) (LogEntry, bool) {
+	index := curIndex - rf.lastIncludeIndex
+	if index < 0 || index >= len(rf.logs) {
+		return LogEntry{}, false
+	}
+	return rf.logs[index], true
 }
 
 // 通过快照偏移还原真实日志任期
@@ -67,6 +71,10 @@ func (rf *Raft) getMinIndexInOneTerm(term int, endIndex int) (minIndex int) {
 			minIndex = index + 1
 			break
 		}
+	}
+	if minIndex == math.MaxInt {
+		Debug(dInfo, "S%d 没有获取 endIndex 范围内, 任期为 term 且 index 最小的日志条目,return rf.lastIncludeIndex + 1:", rf.me, rf.lastIncludeIndex+1)
+		return rf.lastIncludeIndex + 1
 	}
 	return minIndex
 }

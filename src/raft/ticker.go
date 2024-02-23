@@ -79,13 +79,14 @@ func (rf *Raft) committedTicker() {
 		Messages := make([]ApplyMsg, 0)
 		for rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.getLastIndex() && !rf.killed() {
 			rf.lastApplied += 1
+			log, _ := rf.restoreLog(rf.lastApplied)
 			Debug(dCommit, "S%d put the committed entry to apply on the status machine, lastApplied:%d, Command:%d",
-				rf.me, rf.lastApplied, rf.restoreLog(rf.lastApplied).Command)
+				rf.me, rf.lastApplied, log.Command)
 			Messages = append(Messages, ApplyMsg{
 				CommandValid:  true,
 				SnapshotValid: false,
 				CommandIndex:  rf.lastApplied,
-				Command:       rf.restoreLog(rf.lastApplied).Command,
+				Command:       log.Command,
 			})
 		}
 		rf.mu.Unlock()
