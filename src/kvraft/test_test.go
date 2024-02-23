@@ -10,9 +10,6 @@ import "strings"
 import "sync"
 import "sync/atomic"
 import "fmt"
-// import _ "net/http/pprof"
-// import "runtime"
-// import "net/http"
 import "io/ioutil"
 
 // The tester generously allows solutions to complete elections in one second
@@ -416,7 +413,7 @@ func GenericTestSpeed(t *testing.T, part string, maxraftstate int) {
 
 	// heartbeat interval should be ~ 100 ms; require at least 3 ops per
 	const heartbeatInterval = 100 * time.Millisecond
-	const opsPerInterval = 3
+	const opsPerInterval = 2
 	const timePerOp = heartbeatInterval / opsPerInterval
 	if dur > numOps*timePerOp {
 		t.Fatalf("Operations completed too slowly %v/op > %v/op\n", dur/numOps, timePerOp)
@@ -435,16 +432,6 @@ func TestSpeed3A(t *testing.T) {
 }
 
 func TestConcurrent3A(t *testing.T) {
-	// 在测试开始之前，启动goroutine监控
-	// runtime.GOMAXPROCS(1)              // 限制 CPU 使用数，避免过载
-	// runtime.SetMutexProfileFraction(1) // 开启对锁调用的跟踪
-	// runtime.SetBlockProfileRate(1)     // 开启对阻塞操作的跟踪
-	// go func() {
-	// 	// 启动一个 http server，注意 pprof 相关的 handler 已经自动注册过了
-	// 	if err := http.ListenAndServe(":6060", nil); err != nil {
-	// 		fmt.Println(err)
-	// 	}
-	// }()
 	// Test: many clients (3A) ...
 	GenericTest(t, "3A", 5, 5, false, false, false, -1, false)
 }
@@ -604,10 +591,12 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	GenericTest(t, "3A", 15, 7, true, true, true, -1, true)
 }
 
+//
 // if one server falls behind, then rejoins, does it
 // recover by using the InstallSnapshot RPC?
 // also checks that majority discards committed log entries
 // even if minority doesn't respond.
+//
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000

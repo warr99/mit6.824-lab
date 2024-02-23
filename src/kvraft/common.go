@@ -4,18 +4,20 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
-	TimeOut        = "TimeOut"
 )
 
 type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	ClientId int64  // 客户端id
-	Op       OpType // "Put" or "Append"
-	SeqId    int64  // 序列号
-	Key      string // 键
-	Value    string // 值
+	Key   string
+	Value string
+	Op    string // "Put" or "Append"
+	// You'll have to add definitions here.
+	// Field names must start with capital letters,
+	// otherwise RPC will break.
+	SeqId    int   // 操作的唯一标识
+	ClientId int64 // 客户端Id
 }
 
 type PutAppendReply struct {
@@ -25,7 +27,7 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
-	SeqId    int64 // 序列号
+	SeqId    int
 	ClientId int64
 }
 
