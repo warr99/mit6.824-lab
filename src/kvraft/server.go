@@ -4,6 +4,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,6 +133,38 @@ func (kv *KVServer) clientRequestProcessHandler(cmd Op) (Err, string) {
 	}
 }
 
+func (kv *KVServer) PersistSnapShot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.stateMachine.GetMap())
+	e.Encode(kv.seqMap)
+	e.Encode(kv.lastApplied)
+	data := w.Bytes()
+	return data
+}
+
+func (kv *KVServer) DecodeSnapShot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+
+	var kvPersist map[string]string
+	var seqMap map[int64]int64
+	var lastApplied int
+
+	if d.Decode(&kvPersist) != nil || d.Decode(&seqMap) != nil ||
+		d.Decode(&lastApplied) != nil {
+		DPrintf("S%d error to read the snapshot data", kv.me)
+	} else {
+		kv.stateMachine.SetMap(kvPersist)
+		kv.seqMap = seqMap
+		kv.lastApplied = lastApplied
+	}
+}
+
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
 // code to set rf.dead (without needing a lock),
@@ -183,10 +216,21 @@ func (kv *KVServer) applyOp() {
 					}
 				}
 				if currentTerm, isLeader := kv.rf.GetState(); isLeader {
-					DPrintf("ChanRespone Command:%v Response:%v commitIndex:%v currentTerm: %v", op, response, m.CommandIndex, currentTerm)
+					DPrintf("S%d ChanRespone Command:%v Response:%v commitIndex:%v currentTerm: %v", kv.me, op, response, m.CommandIndex, currentTerm)
 					ch := kv.getWaitCh(IndexAndTerm{m.CommandIndex, currentTerm})
 					ch <- response
 				}
+				if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() > kv.maxraftstate {
+					DPrintf("S%d log grows maxraftstate,snapshot", kv.me)
+					snapshot := kv.PersistSnapShot()
+					kv.rf.Snapshot(m.CommandIndex, snapshot)
+				}
+				kv.mu.Unlock()
+			} else if m.SnapshotValid {
+				kv.mu.Lock()
+				DPrintf("handle Raft Code SnapShot msg, load snapshot to stateMachine")
+				kv.DecodeSnapShot(m.Snapshot)
+				kv.lastApplied = m.SnapshotIndex
 				kv.mu.Unlock()
 			}
 		}

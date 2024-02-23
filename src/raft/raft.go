@@ -115,7 +115,6 @@ func (rf *Raft) persistData() []byte {
 	e.Encode(rf.lastIncludeIndex)
 	e.Encode(rf.lastIncludeTerm)
 	data := w.Bytes()
-	//fmt.Printf("RaftNode[%d] persist starts, currentTerm[%d] voteFor[%d] log[%v]\n", rf.me, rf.currentTerm, rf.votedFor, rf.logs)
 	return data
 }
 

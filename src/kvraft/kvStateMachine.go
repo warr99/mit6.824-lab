@@ -7,6 +7,8 @@ type KVStateMachine interface {
 	Get(key string) (string, Err)
 	Put(key, value string) Err
 	Append(key, value string) Err
+	GetMap() map[string]string
+	SetMap(map[string]string)
 }
 
 type MemoryKV struct {
@@ -15,6 +17,14 @@ type MemoryKV struct {
 
 func NewMemoryKV() *MemoryKV {
 	return &MemoryKV{make(map[string]string)}
+}
+
+func (memoryKV *MemoryKV) GetMap() map[string]string {
+	return memoryKV.KV
+}
+
+func (memoryKV *MemoryKV) SetMap(newMap map[string]string) {
+	memoryKV.KV = newMap
 }
 
 func (memoryKV *MemoryKV) Get(key string) (string, Err) {
