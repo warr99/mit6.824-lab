@@ -5,7 +5,6 @@ import (
 	"6.5840/labrpc"
 	"6.5840/raft"
 	"bytes"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,8 +87,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	return kv
 }
 
-//------------------------------------------------------Rpc部分---------------------------------------------------------
-
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	DPrintf("S%d <- C%d Received Get Req", kv.me, args.ClientId)
@@ -169,7 +166,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	timer := time.NewTicker(100 * time.Millisecond)
 	select {
 	case replyOp := <-ch:
-		//fmt.Printf("[ ----Server[%v]----] : receive a %vAsk :%+v,OpType:%+v\n", kv.me, args.OpType, args, replyOp)
+		DPrintf("S%d receive a %v Ask, replyOp:%v", kv.me, replyOp, replyOp.OpType)
 		// 通过clientId、seqId确定唯一操作序列
 		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
 			DPrintf("S%d Received Raft Code Put/Append resp, ErrWrongLeader", kv.me)
@@ -203,7 +200,6 @@ func (kv *KVServer) applyMsgHandlerLoop() {
 
 				index := msg.CommandIndex
 				op := msg.Command.(Op)
-				//fmt.Printf("[ ~~~~applyMsgHandlerLoop~~~~ ]: %+v\n", msg)
 				if !kv.ifDuplicate(op.ClientId, op.SeqId) {
 					kv.mu.Lock()
 					switch op.OpType {
@@ -240,7 +236,6 @@ func (kv *KVServer) applyMsgHandlerLoop() {
 		}
 	}
 }
-
 
 func (kv *KVServer) DecodeSnapShot(snapshot []byte) {
 	if snapshot == nil || len(snapshot) < 1 {
