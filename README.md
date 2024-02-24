@@ -126,8 +126,8 @@
 4. 当然,这个时候的日志还是看起来不方便,各个节点的日志还是交错在一起.这时候可以使用 dstest.py 的脚本了
 
 5. 例如 `VERBOSE=1 go test -run TestInitialElection2A -race | python3 dslogs.py -c 3 `,最终出来的效果如下:
-   * ![dslog](./image/dslog.png)
-     这里使用管道操作符“|”,作为脚本的输入,你也可以先把日志输出到文件中,再将文件作为脚本的参数
+   ![dslog](./image/dslog.png)
+   * 这里使用管道操作符“|”,作为脚本的输入,你也可以先把日志输出到文件中,再将文件作为脚本的参数
 
 ## TEST CASE
 
