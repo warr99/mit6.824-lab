@@ -43,7 +43,6 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-//
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
@@ -53,22 +52,25 @@ func (ck *Clerk) Get(key string) string {
 	for {
 
 		reply := GetReply{}
-		//fmt.Printf("[ ++++Client[%v]++++] : send a Get,args:%+v,serverId[%v]\n", ck.clientId, args, serverId)
+		DPrintf("C%d -> S%d send Get, seqId:%d", ck.clientId, serverId, ck.seqId)
 		ok := ck.servers[serverId].Call("KVServer.Get", &args, &reply)
 
 		if ok {
 			if reply.Err == ErrNoKey {
 				ck.leaderId = serverId
+				DPrintf("C%d <- S%d Received Get reply (NoKey), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				return ""
 			} else if reply.Err == OK {
 				ck.leaderId = serverId
+				DPrintf("C%d <- S%d Received Get reply (OK), confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				return reply.Value
 			} else if reply.Err == ErrWrongLeader {
 				serverId = (serverId + 1) % len(ck.servers)
+				DPrintf("C%d <- S%d Received Get reply (WrongLeader), change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				continue
 			}
 		}
-
+		DPrintf("C%d <- S%d No Get response received, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 		// 节点发生crash等原因
 		serverId = (serverId + 1) % len(ck.servers)
 
@@ -85,7 +87,6 @@ func (ck *Clerk) Get(key string) string {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-//
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	ck.seqId++
@@ -94,18 +95,20 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 
 		reply := PutAppendReply{}
-		//fmt.Printf("[ ++++Client[%v]++++] : send a %v,serverId[%v] : serverId:%+v\n", ck.clientId, op, args, serverId)
+		DPrintf("C%d -> S%d send putAppend, seqId:%d", ck.clientId, serverId, ck.seqId)
 		ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
 			if reply.Err == OK {
+				DPrintf("C%d <- S%d Received putAppend reply, confirm LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				ck.leaderId = serverId
 				return
 			} else if reply.Err == ErrWrongLeader {
 				serverId = (serverId + 1) % len(ck.servers)
+				DPrintf("C%d <- S%d Received putAppend reply, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 				continue
 			}
 		}
-
+		DPrintf("C%d <- S%d No PutAppend response received, change LeaderId:%d", ck.clientId, ck.leaderId, serverId)
 		serverId = (serverId + 1) % len(ck.servers)
 
 	}
