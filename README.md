@@ -1,22 +1,6 @@
 # mit8.5840 - lab
 * 本仓库是 mit 8.5840 分布式系统 配套 lab 的实现
 * 课程主页: https://pdos.csail.mit.edu/6.824/schedule.html
-
-## Current progress
-* lab1
-  * 相关 commit: https://github.com/warr99/mit6.824-lab/commit/f11167b2989681e88ff8979bed9c26ba15b4525a
-  * 相关文档:
-    * MapReduce 总结: https://juejin.cn/post/7282603229623320637
-    * 实现思路: https://juejin.cn/post/7288963208395096122
-* lab2A
-  * 相关 commit: https://github.com/warr99/mit6.824-lab/commit/f8054613cd0610cb88ea7239af51f2c7977c5109
-  * 相关文档:
-    * Raft 选举总结: https://juejin.cn/post/7313242001113333798
-    * 实现思路: https://juejin.cn/post/7313242113436287014
-* lab2B
-* lab2C
-* lab2D
-
   
 ## TIPS
 ### About Test
@@ -147,9 +131,34 @@
 
 ## TEST CASE
 
+### Lab1
+
+* 相关 commit: https://github.com/warr99/mit6.824-lab/commit/f11167b2989681e88ff8979bed9c26ba15b4525a
+* 相关文档:
+	* MapReduce 总结: https://juejin.cn/post/7282603229623320637
+	* 实现思路: https://juejin.cn/post/7288963208395096122
+
+### Lab2
 |Test |Failed | Total |          Time|
 | ---- | ---- | ---- | ---|
 | 2A   |      0 |   100 |  14.45 ± 0.26 |
 | 2B   |      0 |   100 |  40.95 ± 1.04 |
 | 2C   |      0 |   100 | 124.00 ± 4.14 |
 | 2D   |      0 |   100 | 181.34 ± 7.50 |
+
+> * lab2A
+>   * 相关 commit: https://github.com/warr99/mit6.824-lab/commit/f8054613cd0610cb88ea7239af51f2c7977c5109
+>   * 相关文档:
+>     * Raft 选举总结: https://juejin.cn/post/7313242001113333798
+>     * 实现思路: https://juejin.cn/post/7313242113436287014
+
+### Lab3
+|Test |Failed | Total |          Time|
+| ---- | ---- | ---- | ---|
+| 3A   |      0 |   100 |  274.13 ± 0.94 |
+| 3B   |      3 |   100 |  200.60 ± 0.73 |
+
+> 存在的问题：
+> 1. 3A 和 3B 的 TestSpeed 其实没有通过,后续还需要优化
+> 2. 3B 有概率发生 'history is not linearizable' or 'get wrong value'
+> 3. 3A 使用 -race 检测会发生 goroutine 泄露，在 AppendEntries 创建大量的 goroutine, 造成严重的锁竞争
