@@ -4,7 +4,6 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
-	"sort"
 	"sync"
 	"time"
 )
@@ -30,6 +29,10 @@ type Op struct {
 	Index       int
 	OpType      OpType
 	JoinServers map[int][]string
+	LeaveGids   []int
+	MoveShard   int
+	MoveGid     int
+	QueryNum    int
 }
 
 func (sc *ShardCtrler) getWaitCh(index int) chan Op {
@@ -60,17 +63,20 @@ func (sc *ShardCtrler) isDuplicate(clientId int64, seqId int) bool {
 //	@return []int 根据负载从大到小排序的gid切片
 func sortGroupShard(GroupMap map[int]int) []int {
 	// 创建一个包含所有组ID的切片
-	gids := make([]int, 0, len(GroupMap))
+	gidSlice := make([]int, 0, len(GroupMap))
 	for gid := range GroupMap {
-		gids = append(gids, gid)
+		gidSlice = append(gidSlice, gid)
 	}
+	length := len(GroupMap)
+	for i := 0; i < length-1; i++ {
+		for j := length - 1; j > i; j-- {
 
-	// 使用排序函数对组ID进行排序，根据负载从大到小排序
-	sort.Slice(gids, func(i, j int) bool {
-		return GroupMap[gids[i]] > GroupMap[gids[j]]
-	})
-
-	return gids
+			if GroupMap[gidSlice[j]] > GroupMap[gidSlice[j-1]] || (GroupMap[gidSlice[j]] == GroupMap[gidSlice[j-1]] && gidSlice[j] > gidSlice[j-1]) {
+				gidSlice[j], gidSlice[j-1] = gidSlice[j-1], gidSlice[j]
+			}
+		}
+	}
+	return gidSlice
 }
 
 // moreAllocations 判断给定组的负载是否需要更多的分配
@@ -99,7 +105,7 @@ func (sc *ShardCtrler) loadBalance(GroupMap map[int]int, lastShards [NShards]int
 		target := ave
 
 		// 判断这个数是否需要更多分配，因为不可能完全均分，在前列的应该为ave+1
-		if !moreAllocations(length, remainder, i) {
+		if moreAllocations(length, remainder, i) {
 			target = ave + 1
 		}
 
@@ -123,7 +129,7 @@ func (sc *ShardCtrler) loadBalance(GroupMap map[int]int, lastShards [NShards]int
 	// 为负载少的group分配多出来的group
 	for i := 0; i < length; i++ {
 		target := ave
-		if !moreAllocations(length, remainder, i) {
+		if moreAllocations(length, remainder, i) {
 			target = ave + 1
 		}
 
@@ -181,14 +187,108 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 
 func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	// Your code here.
+	DPrintf("S%d <- C%d Received Get Leave", sc.me, args.ClientId)
+	_, isLeader := sc.rf.GetState()
+	if !isLeader {
+		reply.Err = WrongLeader
+		DPrintf("S%d not leader, return WrongLeader", sc.me)
+		return
+	}
+	op := Op{OpType: LeaveOp, SeqId: args.SeqId, ClientId: args.ClientId, LeaveGids: args.GIDs}
+	lastIndex, _, _ := sc.rf.Start(op)
+	ch := sc.getWaitCh(lastIndex)
+	defer func() {
+		sc.mu.Lock()
+		delete(sc.waitChMap, lastIndex)
+		sc.mu.Unlock()
+	}()
+	timer := time.NewTicker(LeaveOverTime * time.Millisecond)
+	select {
+	case replyOp := <-ch:
+		DPrintf("S%d receive a %v Ask, replyOp:%v", sc.me, replyOp, replyOp.OpType)
+		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
+			reply.Err = WrongLeader
+		} else {
+			reply.Err = OK
+			return
+		}
+	case <-timer.C:
+		reply.Err = WrongLeader
+	}
 }
 
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
+	DPrintf("S%d <- C%d Received Get Move", sc.me, args.ClientId)
+	_, isLeader := sc.rf.GetState()
+	if !isLeader {
+		reply.Err = WrongLeader
+		DPrintf("S%d not leader, return WrongLeader", sc.me)
+		return
+	}
+	op := Op{OpType: MoveOp, SeqId: args.SeqId, ClientId: args.ClientId, MoveShard: args.Shard, MoveGid: args.GID}
+	lastIndex, _, _ := sc.rf.Start(op)
+	ch := sc.getWaitCh(lastIndex)
+	defer func() {
+		sc.mu.Lock()
+		delete(sc.waitChMap, lastIndex)
+		sc.mu.Unlock()
+	}()
+	timer := time.NewTicker(LeaveOverTime * time.Millisecond)
+	select {
+	case replyOp := <-ch:
+		DPrintf("S%d receive a %v Ask, replyOp:%v", sc.me, replyOp, replyOp.OpType)
+		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
+			reply.Err = WrongLeader
+		} else {
+			reply.Err = OK
+			return
+		}
+	case <-timer.C:
+		reply.Err = WrongLeader
+	}
 }
 
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
+	DPrintf("S%d <- C%d Received Get Query", sc.me, args.ClientId)
+	_, ifLeader := sc.rf.GetState()
+	if !ifLeader {
+		DPrintf("S%d not leader, return WrongLeader", sc.me)
+		reply.Err = WrongLeader
+		return
+	}
+	op := Op{OpType: QueryOp, SeqId: args.SeqId, ClientId: args.ClientId, QueryNum: args.Num}
+	lastIndex, _, _ := sc.rf.Start(op)
+
+	ch := sc.getWaitCh(lastIndex)
+	defer func() {
+		sc.mu.Lock()
+		delete(sc.waitChMap, lastIndex)
+		sc.mu.Unlock()
+	}()
+	timer := time.NewTicker(QueryOverTime * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case replyOp := <-ch:
+		DPrintf("S%d receive a %v Ask, replyOp:%v", sc.me, replyOp, replyOp.OpType)
+		if op.ClientId != replyOp.ClientId || op.SeqId != replyOp.SeqId {
+			reply.Err = WrongLeader
+		} else {
+			sc.mu.Lock()
+			reply.Err = OK
+			sc.seqMap[op.ClientId] = op.SeqId
+			if op.QueryNum == -1 || op.QueryNum >= len(sc.configs) {
+				reply.Config = sc.configs[len(sc.configs)-1]
+			} else {
+				reply.Config = sc.configs[op.QueryNum]
+			}
+			sc.mu.Unlock()
+		}
+	case <-timer.C:
+		reply.Err = WrongLeader
+	}
 }
 
 // the tester calls Kill() when a ShardCtrler instance won't
@@ -228,22 +328,30 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 }
 
 func (sc *ShardCtrler) applyMsgHandlerLoop() {
-	for {
-		select {
-		case msg := <-sc.applyCh:
-			if msg.CommandValid {
-				index := msg.CommandIndex
-				op := msg.Command.(Op)
-				if !sc.isDuplicate(op.ClientId, op.SeqId) {
-					switch op.OpType {
-					case JoinOp:
-						DPrintf("S%d Receive Join,op: %v", sc.me, op)
-						sc.seqMap[op.ClientId] = op.SeqId
-						sc.configs = append(sc.configs, *sc.JoinHandler(op.JoinServers))
-					}
+	for msg := range sc.applyCh {
+		if msg.CommandValid {
+			index := msg.CommandIndex
+			op := msg.Command.(Op)
+			if !sc.isDuplicate(op.ClientId, op.SeqId) {
+				sc.mu.Lock()
+				switch op.OpType {
+				case JoinOp:
+					DPrintf("S%d Receive Join,op: %v", sc.me, op)
+					sc.seqMap[op.ClientId] = op.SeqId
+					sc.configs = append(sc.configs, *sc.JoinHandler(op.JoinServers))
+				case LeaveOp:
+					DPrintf("S%d Receive Leave,op: %v", sc.me, op)
+					sc.seqMap[op.ClientId] = op.SeqId
+					sc.configs = append(sc.configs, *sc.LeaveHandler(op.LeaveGids))
+				case MoveOp:
+					DPrintf("S%d Receive Move,op: %v", sc.me, op)
+					sc.seqMap[op.ClientId] = op.SeqId
+					sc.configs = append(sc.configs, *sc.MoveHandler(op.MoveGid, op.MoveShard))
 				}
-				sc.getWaitCh(index) <- op
+				sc.seqMap[op.ClientId] = op.SeqId
+				sc.mu.Unlock()
 			}
+			sc.getWaitCh(index) <- op
 		}
 	}
 }
@@ -270,13 +378,15 @@ func (sc *ShardCtrler) JoinHandler(servers map[int][]string) *Config {
 		GroupMap[gid] = 0
 	}
 	for _, gid := range lastConfig.Shards {
-		GroupMap[gid]++
+		if gid != 0 {
+			GroupMap[gid]++
+		}
 	}
 
-	DPrintf("S%d Before loadBalance - GroupMap: %v, Shards: %v\n", sc.me, GroupMap, lastConfig.Shards)
+	DPrintf("S%d Join Before loadBalance - GroupMap: %v, Shards: %v\n", sc.me, GroupMap, lastConfig.Shards)
 	// 负载均衡
 	newShards := sc.loadBalance(GroupMap, lastConfig.Shards)
-	DPrintf("S%d After loadBalance - GroupMap: %v, Shards: %v\n", sc.me, GroupMap, lastConfig.Shards)
+	DPrintf("S%d Join After loadBalance - GroupMap: %v, Shards: %v\n", sc.me, GroupMap, lastConfig.Shards)
 
 	// 返回新的配置
 	return &Config{
@@ -284,4 +394,64 @@ func (sc *ShardCtrler) JoinHandler(servers map[int][]string) *Config {
 		Shards: newShards,
 		Groups: newGroups,
 	}
+}
+
+func (sc *ShardCtrler) LeaveHandler(gids []int) *Config {
+	leaveMap := make(map[int]bool)
+	for _, gid := range gids {
+		leaveMap[gid] = true
+	}
+	lastConfig := sc.configs[len(sc.configs)-1]
+	// 复制原有的 Replication Group
+	newGroups := make(map[int][]string)
+	for gid, serverList := range lastConfig.Groups {
+		newGroups[gid] = serverList
+	}
+	// 删除 leave 的 Replication Group
+	for _, gid := range gids {
+		delete(newGroups, gid)
+	}
+	// 统计当前每一个 Replication Group 对应了多少个 Shard (用于负载均衡)
+	GroupMap := make(map[int]int)
+	for gid := range newGroups {
+		GroupMap[gid] = 0
+	}
+	newShard := lastConfig.Shards
+	for shard, gid := range lastConfig.Shards {
+		if gid != 0 {
+			if leaveMap[gid] {
+				newShard[shard] = 0
+			} else {
+				GroupMap[gid]++
+			}
+		}
+	}
+	if len(GroupMap) == 0 {
+		return &Config{
+			Num:    len(sc.configs),
+			Shards: [10]int{},
+			Groups: newGroups,
+		}
+	}
+	return &Config{
+		Num:    len(sc.configs),
+		Shards: sc.loadBalance(GroupMap, newShard),
+		Groups: newGroups,
+	}
+}
+
+func (sc *ShardCtrler) MoveHandler(gid int, shard int) *Config {
+	lastConfig := sc.configs[len(sc.configs)-1]
+
+	newConfig := Config{Num: len(sc.configs),
+		Shards: lastConfig.Shards,
+		Groups: map[int][]string{}}
+
+	newConfig.Shards[shard] = gid
+
+	for gids, servers := range lastConfig.Groups {
+		newConfig.Groups[gids] = servers
+	}
+
+	return &newConfig
 }

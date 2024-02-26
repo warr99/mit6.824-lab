@@ -52,11 +52,17 @@ const (
 )
 
 const (
-	JoinOp OpType = "JoinType"
+	JoinOp  OpType = "JoinType"
+	LeaveOp OpType = "LeaveType"
+	MoveOp  OpType = "MoveType"
+	QueryOp OpType = "QueryType"
 )
 
 const (
-	JoinOverTime = 100
+	JoinOverTime  = 100
+	LeaveOverTime = 100
+	MoveOverTime  = 100
+	QueryOverTime = 100
 )
 
 type Err string
@@ -74,7 +80,9 @@ type JoinReply struct {
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	GIDs     []int
+	SeqId    int
+	ClientId int64
 }
 
 type LeaveReply struct {
@@ -83,8 +91,10 @@ type LeaveReply struct {
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	Shard    int
+	GID      int
+	SeqId    int
+	ClientId int64
 }
 
 type MoveReply struct {
@@ -93,7 +103,9 @@ type MoveReply struct {
 }
 
 type QueryArgs struct {
-	Num int // desired config number
+	Num      int // desired config number
+	SeqId    int
+	ClientId int64
 }
 
 type QueryReply struct {

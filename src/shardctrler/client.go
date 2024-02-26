@@ -37,18 +37,23 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 
 // 获取系统的配置信息
 func (ck *Clerk) Query(num int) Config {
-	args := &QueryArgs{}
-	// Your code here.
-	args.Num = num
+	ck.seqId++
+	args := QueryArgs{Num: num, ClientId: ck.clientId, SeqId: ck.seqId}
+	serverId := ck.leaderId
 	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply QueryReply
-			ok := srv.Call("ShardCtrler.Query", args, &reply)
-			if ok && !reply.WrongLeader {
+		reply := QueryReply{}
+		DPrintf("C%v -> S%v send a Query, args:%v", ck.clientId, serverId, args)
+		ok := ck.servers[serverId].Call("ShardCtrler.Query", &args, &reply)
+		if ok {
+			if reply.Err == OK {
+				ck.leaderId = serverId
 				return reply.Config
+			} else if reply.Err == WrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				continue
 			}
 		}
+		serverId = (serverId + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -83,39 +88,46 @@ func (ck *Clerk) Join(servers map[int][]string) {
 
 // 移除先前加入的复制组
 func (ck *Clerk) Leave(gids []int) {
-	args := &LeaveArgs{}
-	// Your code here.
-	args.GIDs = gids
-
+	ck.seqId++
+	args := LeaveArgs{GIDs: gids, ClientId: ck.clientId, SeqId: ck.seqId}
+	serverId := ck.leaderId
 	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply LeaveReply
-			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && !reply.WrongLeader {
+		reply := LeaveReply{}
+		DPrintf("C%v -> S%v send a Leave, args:%v", ck.clientId, serverId, args)
+		ok := ck.servers[serverId].Call("ShardCtrler.Leave", &args, &reply)
+		if ok {
+			if reply.Err == OK {
+				ck.leaderId = serverId
 				return
+			} else if reply.Err == WrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				continue
 			}
 		}
+		serverId = (serverId + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 // 将特定分片移动到指定的复制组
 func (ck *Clerk) Move(shard int, gid int) {
-	args := &MoveArgs{}
-	// Your code here.
-	args.Shard = shard
-	args.GID = gid
-
+	ck.seqId++
+	args := MoveArgs{Shard: shard, GID: gid, ClientId: ck.clientId, SeqId: ck.seqId}
+	serverId := ck.leaderId
 	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply MoveReply
-			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && !reply.WrongLeader {
+		reply := MoveReply{}
+		DPrintf("C%v -> S%v send a Move, args:%v", ck.clientId, serverId, args)
+		ok := ck.servers[serverId].Call("ShardCtrler.Move", &args, &reply)
+		if ok {
+			if reply.Err == OK {
+				ck.leaderId = serverId
 				return
+			} else if reply.Err == WrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				continue
 			}
 		}
+		serverId = (serverId + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
