@@ -8,10 +8,14 @@ import "6.5840/labrpc"
 import "time"
 import "crypto/rand"
 import "math/big"
+import mathrand "math/rand"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
+	seqId    int
+	leaderId int
+	clientId int64
 }
 
 func nrand() int64 {
@@ -25,9 +29,13 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
+	ck.clientId = nrand()
+	ck.leaderId = mathrand.Intn(len(ck.servers))
+	ck.seqId = 0
 	return ck
 }
 
+// 获取系统的配置信息
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
@@ -37,7 +45,7 @@ func (ck *Clerk) Query(num int) Config {
 		for _, srv := range ck.servers {
 			var reply QueryReply
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && !reply.WrongLeader {
 				return reply.Config
 			}
 		}
@@ -45,24 +53,35 @@ func (ck *Clerk) Query(num int) Config {
 	}
 }
 
+// 用于添加新的复制组
 func (ck *Clerk) Join(servers map[int][]string) {
-	args := &JoinArgs{}
+	args := JoinArgs{}
 	// Your code here.
+	ck.seqId++
 	args.Servers = servers
+	args.ClientId = ck.clientId
+	args.SeqId = ck.seqId
+	serverId := ck.leaderId
 
 	for {
-		// try each known server.
-		for _, srv := range ck.servers {
-			var reply JoinReply
-			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
+		reply := JoinReply{}
+		DPrintf("C%v -> S%v send a Join, args:%v", ck.clientId, serverId, args)
+		ok := ck.servers[serverId].Call("ShardCtrler.Join", &args, &reply)
+		if ok {
+			if reply.Err == OK {
+				ck.leaderId = serverId
 				return
+			} else if reply.WrongLeader {
+				serverId = (serverId + 1) % len(ck.servers)
+				continue
 			}
 		}
+		serverId = (serverId + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
+// 移除先前加入的复制组
 func (ck *Clerk) Leave(gids []int) {
 	args := &LeaveArgs{}
 	// Your code here.
@@ -73,7 +92,7 @@ func (ck *Clerk) Leave(gids []int) {
 		for _, srv := range ck.servers {
 			var reply LeaveReply
 			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && !reply.WrongLeader {
 				return
 			}
 		}
@@ -81,6 +100,7 @@ func (ck *Clerk) Leave(gids []int) {
 	}
 }
 
+// 将特定分片移动到指定的复制组
 func (ck *Clerk) Move(shard int, gid int) {
 	args := &MoveArgs{}
 	// Your code here.
@@ -92,7 +112,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 		for _, srv := range ck.servers {
 			var reply MoveReply
 			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && reply.WrongLeader == false {
+			if ok && !reply.WrongLeader {
 				return
 			}
 		}

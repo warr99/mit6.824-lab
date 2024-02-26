@@ -20,22 +20,52 @@ package shardctrler
 // The number of shards.
 const NShards = 10
 
+//		 +-------------------+
+//		 | Shard Controller  |
+//		 +-------------------+
+//		/          |          \
+//	   /		   |		   \
+//
+// +-------------+   +-------------+   	+-------------+
+// | Shard 1 (a) |   | Shard 2 (b) |   	| Shard 3 (c) |
+// +-------------+   +-------------+   	+-------------+
+//
+//	|                   |                    |
+//	v                   v                    v
+//
+// +-------------------+ +-------------------+ +-------------------+
+// | Replication Group | | Replication Group | | Replication Group |
+// |   (gid=1)         | |   (gid=2)         | |   (gid=3)         |
+// |   Node 1 Node 2   | |   Node 3 Node 4   | |   Node 5  Node 6  |
+// +-------------------+ +-------------------+ +-------------------+
 // A configuration -- an assignment of shards to groups.
 // Please don't change this.
 type Config struct {
-	Num    int              // config number
-	Shards [NShards]int     // shard -> gid
-	Groups map[int][]string // gid -> servers[]
+	Num    int              // 配置的编号,用于唯一标识不同的配置
+	Shards [NShards]int     // shard -> gid 分片集合,在这个lab中一共有10个分片
+	Groups map[int][]string // gid -> servers 一个分片对应的节点的集合
 }
 
 const (
-	OK = "OK"
+	OK          = "OK"
+	WrongLeader = "WrongLeader"
+)
+
+const (
+	JoinOp OpType = "JoinType"
+)
+
+const (
+	JoinOverTime = 100
 )
 
 type Err string
+type OpType string
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	Servers  map[int][]string // new GID -> servers mappings
+	SeqId    int
+	ClientId int64
 }
 
 type JoinReply struct {

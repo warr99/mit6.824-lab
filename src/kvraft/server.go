@@ -20,7 +20,6 @@ type Op struct {
 	Key      string
 	Value    string
 	ClientId int64
-	Index    int // raft服务层传来的Index
 	OpType   string
 }
 
