@@ -162,3 +162,9 @@
 > 1. 3A 和 3B 的 TestSpeed 其实没有通过,后续还需要优化
 > 2. 3B 有概率发生 'history is not linearizable' or 'get wrong value'
 > 3. 3A 使用 -race 检测会发生 goroutine 泄露，在 AppendEntries 创建大量的 goroutine, 造成严重的锁竞争
+
+### Lab4A
+|Test |Failed | Total |          Time|
+| ---- | ---- | ---- | ---|
+| TestBasic   |      0 |   1000 |  4.01 ± 0.19 |
+| TestMulti   |      0 |   1000 |  1.63 ± 0.09 |
