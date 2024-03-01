@@ -6,6 +6,8 @@ import "sync"
 import "6.5840/labgob"
 import "6.5840/shardctrler"
 import "time"
+import "sync/atomic"
+import "bytes"
 
 type Op struct {
 	// Your definitions here.
@@ -50,10 +52,15 @@ type ShardKV struct {
 
 	// Your definitions here.
 
+	dead int32 // set by Kill()
+
 	Config shardctrler.Config
 
 	shardsPersist []Shard
 	waitChMap     map[int]chan OpReply
+	SeqMap        map[int64]int
+	mck           *shardctrler.Clerk // sck is a client used to contact shard master
+
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -126,8 +133,91 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (kv *ShardKV) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+}
+
+func (kv *ShardKV) killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
+}
+
+func (kv *ShardKV) applyMsgHandlerLoop() {
+	for {
+		if kv.killed() {
+			return
+		}
+		select {
+
+		case msg := <-kv.applyCh:
+
+			if msg.CommandValid {
+				kv.mu.Lock()
+				op := msg.Command.(Op)
+				reply := OpReply{
+					ClientId: op.ClientId,
+					SeqId:    op.SeqId,
+					Err:      OK,
+				}
+
+				if op.OpType == PutType || op.OpType == GetType || op.OpType == AppendType {
+
+					shardId := key2shard(op.Key)
+
+					if kv.Config.Shards[shardId] != kv.gid {
+						reply.Err = ErrWrongGroup
+					} else if kv.shardsPersist[shardId].stateMachine == nil {
+						reply.Err = ShardNotReady
+					} else {
+
+						if !kv.isDuplicate(op.ClientId, op.SeqId) {
+
+							kv.SeqMap[op.ClientId] = op.SeqId
+							switch op.OpType {
+							case PutType:
+								kv.shardsPersist[shardId].stateMachine[op.Key] = op.Value
+							case AppendType:
+								kv.shardsPersist[shardId].stateMachine[op.Key] += op.Value
+							case GetType:
+							default:
+								DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
+							}
+						}
+					}
+				} else {
+					// request from server of other group
+					switch op.OpType {
+
+					case UpConfigType:
+					case AddShardType:
+					case RemoveShardType:
+						// remove operation is from previous UpConfig
+					default:
+						DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
+					}
+				}
+
+				if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() > kv.maxraftstate {
+					snapshot := kv.PersistSnapShot()
+					kv.rf.Snapshot(msg.CommandIndex, snapshot)
+				}
+
+				ch := kv.getWaitCh(msg.CommandIndex)
+				ch <- reply
+				kv.mu.Unlock()
+
+			}
+
+			if msg.SnapshotValid {
+				kv.mu.Lock()
+				kv.DecodeSnapShot(msg.Snapshot)
+				kv.mu.Unlock()
+				continue
+			}
+		}
+	}
+
 }
 
 // servers[] contains the ports of the servers in this group.
@@ -168,13 +258,24 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.gid = gid
 	kv.ctrlers = ctrlers
 
+	kv.shardsPersist = make([]Shard, shardctrler.NShards)
+
+	kv.SeqMap = make(map[int64]int)
+
 	// Your initialization code here.
 
 	// Use something like this to talk to the shardctrler:
 	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.waitChMap = make(map[int]chan OpReply)
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		kv.DecodeSnapShot(snapshot)
+	}
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	go kv.applyMsgHandlerLoop()
 
 	return kv
 }
@@ -214,5 +315,55 @@ func (kv *ShardKV) startCommand(command Op, timeoutPeriod time.Duration) Err {
 		return re.Err
 	case <-timer.C:
 		return ErrOverTime
+	}
+}
+
+func (kv *ShardKV) isDuplicate(clientId int64, seqId int) bool {
+
+	lastSeqId, exist := kv.SeqMap[clientId]
+	if !exist {
+		return false
+	}
+	return seqId <= lastSeqId
+}
+
+func (kv *ShardKV) PersistSnapShot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if e.Encode(kv.shardsPersist) != nil {
+		DPrintf("S%d fails to encode shardsPersist.", kv.me)
+	}
+	if e.Encode(kv.SeqMap) != nil {
+		DPrintf("S%d fails to encode SeqMap.", kv.me)
+	}
+	if e.Encode(kv.maxraftstate) != nil {
+		DPrintf("S%d fails to encode maxraftstate.", kv.me)
+	}
+	if e.Encode(kv.Config) != nil {
+		DPrintf("S%d fails to encode Config.", kv.me)
+	}
+	return w.Bytes()
+}
+
+func (kv *ShardKV) DecodeSnapShot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+
+	var shardsPersist []Shard
+	var SeqMap map[int64]int
+	var MaxRaftState int
+	var Config, LastConfig shardctrler.Config
+
+	if d.Decode(&shardsPersist) != nil || d.Decode(&SeqMap) != nil ||
+		d.Decode(&MaxRaftState) != nil || d.Decode(&Config) != nil || d.Decode(&LastConfig) != nil {
+		DPrintf("S%v Failed to decode snapshot", kv.me)
+	} else {
+		kv.shardsPersist = shardsPersist
+		kv.SeqMap = SeqMap
+		kv.maxraftstate = MaxRaftState
+		kv.Config = Config
 	}
 }
