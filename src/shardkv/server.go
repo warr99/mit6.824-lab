@@ -1,18 +1,42 @@
 package shardkv
 
-
 import "6.5840/labrpc"
 import "6.5840/raft"
 import "sync"
 import "6.5840/labgob"
-
-
+import "6.5840/shardctrler"
+import "time"
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	SeqId    int
+	OpType   Operation // "get" "put" "append"
+	Key      string
+	Value    string
 }
+
+type Shard struct {
+	stateMachine map[string]string
+	ConfigNum    int // what version this Shard is in
+}
+
+type OpReply struct {
+	ClientId int64
+	SeqId    int
+	Err      Err
+}
+
+const (
+	UpConfigLoopInterval = 100 * time.Millisecond // poll configuration period
+	GetTimeout           = 500 * time.Millisecond
+	AppOrPutTimeout      = 500 * time.Millisecond
+	UpConfigTimeout      = 500 * time.Millisecond
+	AddShardsTimeout     = 500 * time.Millisecond
+	RemoveShardsTimeout  = 500 * time.Millisecond
+)
 
 type ShardKV struct {
 	mu           sync.Mutex
@@ -25,15 +49,76 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-}
 
+	Config shardctrler.Config
+
+	shardsPersist []Shard
+	waitChMap     map[int]chan OpReply
+}
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	shardId := key2shard(args.Key)
+
+	kv.mu.Lock()
+	// 检查当前服务器是否属于该分片的组
+	if kv.Config.Shards[shardId] != kv.gid {
+		reply.Err = ErrWrongGroup
+	} else if kv.shardsPersist[shardId].stateMachine == nil {
+		reply.Err = ShardNotReady
+	}
+	kv.mu.Unlock()
+
+	if reply.Err == ErrWrongGroup || reply.Err == ShardNotReady {
+		return
+	}
+
+	command := Op{
+		OpType:   GetType,
+		ClientId: args.ClientId,
+		SeqId:    args.RequestId,
+		Key:      args.Key,
+	}
+
+	err := kv.startCommand(command, GetTimeout)
+	if err != OK {
+		reply.Err = err
+		return
+	}
+
+	kv.mu.Lock()
+	if kv.Config.Shards[shardId] != kv.gid {
+		reply.Err = ErrWrongGroup
+	} else if kv.shardsPersist[shardId].stateMachine == nil {
+		reply.Err = ShardNotReady
+	} else {
+		reply.Err = OK
+		reply.Value = kv.shardsPersist[shardId].stateMachine[args.Key]
+	}
+	kv.mu.Unlock()
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	shardId := key2shard(args.Key)
+	kv.mu.Lock()
+	if kv.Config.Shards[shardId] != kv.gid {
+		reply.Err = ErrWrongGroup
+	} else if kv.shardsPersist[shardId].stateMachine == nil {
+		reply.Err = ShardNotReady
+	}
+	kv.mu.Unlock()
+	if reply.Err == ErrWrongGroup || reply.Err == ShardNotReady {
+		return
+	}
+	command := Op{
+		OpType:   args.Op,
+		ClientId: args.ClientId,
+		SeqId:    args.RequestId,
+		Key:      args.Key,
+		Value:    args.Value,
+	}
+	reply.Err = kv.startCommand(command, AppOrPutTimeout)
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -44,7 +129,6 @@ func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
 	// Your code here, if desired.
 }
-
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -92,6 +176,43 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-
 	return kv
+}
+
+func (kv *ShardKV) getWaitCh(index int) chan OpReply {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	ch, exist := kv.waitChMap[index]
+	if !exist {
+		kv.waitChMap[index] = make(chan OpReply, 1)
+		ch = kv.waitChMap[index]
+	}
+	return ch
+}
+
+func (kv *ShardKV) startCommand(command Op, timeoutPeriod time.Duration) Err {
+	kv.mu.Lock()
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		kv.mu.Unlock()
+		return ErrWrongLeader
+	}
+
+	ch := kv.getWaitCh(index)
+	kv.mu.Unlock()
+	timer := time.NewTicker(timeoutPeriod)
+	defer timer.Stop()
+	select {
+	case re := <-ch:
+		kv.mu.Lock()
+		delete(kv.waitChMap, index)
+		if re.SeqId != command.SeqId || re.ClientId != command.ClientId {
+			kv.mu.Unlock()
+			return ErrInconsistentData
+		}
+		kv.mu.Unlock()
+		return re.Err
+	case <-timer.C:
+		return ErrOverTime
+	}
 }

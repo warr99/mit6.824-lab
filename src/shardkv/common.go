@@ -10,19 +10,22 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongGroup  = "ErrWrongGroup"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK                  = "OK"
+	ErrNoKey            = "ErrNoKey"
+	ErrWrongGroup       = "ErrWrongGroup"
+	ErrWrongLeader      = "ErrWrongLeader"
+	ShardNotReady       = "ShardNotReady"
+	ErrInconsistentData = "ErrInconsistentData"
+	ErrOverTime         = "ErrOverTime"
 )
 
 const (
 	PutType         Operation = "Put"
-	AppendType                = "Append"
-	GetType                   = "Get"
-	UpConfigType              = "UpConfig"
-	AddShardType              = "AddShard"
-	RemoveShardType           = "RemoveShard"
+	AppendType      Operation = "Append"
+	GetType         Operation = "Get"
+	UpConfigType    Operation = "UpConfig"
+	AddShardType    Operation = "AddShard"
+	RemoveShardType Operation = "RemoveShard"
 )
 
 type Operation string
