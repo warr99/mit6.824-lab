@@ -38,6 +38,8 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	seqId    int
+	clientId int64
 }
 
 // the tester calls MakeClerk.
@@ -52,6 +54,9 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.seqId = 0
+	ck.config = ck.sm.Query(-1)
 	return ck
 }
 
@@ -60,8 +65,11 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // keeps trying forever in the face of all other errors.
 // You will have to modify this function.
 func (ck *Clerk) Get(key string) string {
+	ck.seqId++
 	args := GetArgs{}
 	args.Key = key
+	args.ClientId = ck.clientId
+	args.RequestId = ck.seqId
 
 	for {
 		shard := key2shard(key)
@@ -71,11 +79,14 @@ func (ck *Clerk) Get(key string) string {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
+				DPrintf("C%v -> S%v send a GetType, args: %v\n", ck.clientId, si, args)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					DPrintf("C%v <- S%v receive a GetType resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					DPrintf("C%v <- S%v receive a GetType resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
 					break
 				}
 				// ... not ok, or ErrWrongLeader
@@ -85,18 +96,19 @@ func (ck *Clerk) Get(key string) string {
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
-
-	return ""
 }
 
 // shared by Put and Append.
 // You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	ck.seqId++
+
 	args := PutAppendArgs{}
 	args.Key = key
 	args.Value = value
-	args.Op = op
-
+	args.Op = Operation(op)
+	args.ClientId = ck.clientId
+	args.RequestId = ck.seqId
 
 	for {
 		shard := key2shard(key)
@@ -105,11 +117,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
+				DPrintf("C%v -> S%v send a PutAppend, args: %v\n", ck.clientId, si, args)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					DPrintf("C%v <- S%v receive a PutAppend resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					DPrintf("C%v <- S%v receive a PutAppend resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
 					break
 				}
 				// ... not ok, or ErrWrongLeader
