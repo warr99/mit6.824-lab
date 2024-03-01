@@ -151,7 +151,7 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 		select {
 
 		case msg := <-kv.applyCh:
-
+			DPrintf("S%d Received Raft Code commit msg", kv.me)
 			if msg.CommandValid {
 				kv.mu.Lock()
 				op := msg.Command.(Op)
@@ -176,13 +176,17 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 							kv.SeqMap[op.ClientId] = op.SeqId
 							switch op.OpType {
 							case PutType:
+								DPrintf("S%d handle Raft Code Put applyMsg, Put val to stateMachine", kv.me)
 								kv.shardsPersist[shardId].stateMachine[op.Key] = op.Value
 							case AppendType:
+								DPrintf("S%d handle Raft Code Append applyMsg, Append val to stateMachine", kv.me)
 								kv.shardsPersist[shardId].stateMachine[op.Key] += op.Value
 							case GetType:
 							default:
 								DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
 							}
+						} else {
+							DPrintf("S%d applyMsg is duplicate, op.ClientId:%d, op.SeqId:%d", kv.me, op.ClientId, op.SeqId)
 						}
 					}
 				} else {
@@ -190,8 +194,11 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 					switch op.OpType {
 
 					case UpConfigType:
+						DPrintf("S%d handle Raft Code Put UpConfigType", kv.me)
 					case AddShardType:
+						DPrintf("S%d handle Raft Code Put AddShardType", kv.me)
 					case RemoveShardType:
+						DPrintf("S%d handle Raft Code Put RemoveShardType", kv.me)
 						// remove operation is from previous UpConfig
 					default:
 						DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
@@ -199,6 +206,7 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 				}
 
 				if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() > kv.maxraftstate {
+					DPrintf("S%d greater than maxraftstate, Snapshot", kv.me)
 					snapshot := kv.PersistSnapShot()
 					kv.rf.Snapshot(msg.CommandIndex, snapshot)
 				}
@@ -211,6 +219,7 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 
 			if msg.SnapshotValid {
 				kv.mu.Lock()
+				DPrintf("S%d handle Raft Code Snapshot, DecodeSnapShot", kv.me)
 				kv.DecodeSnapShot(msg.Snapshot)
 				kv.mu.Unlock()
 				continue
@@ -293,6 +302,7 @@ func (kv *ShardKV) getWaitCh(index int) chan OpReply {
 
 func (kv *ShardKV) startCommand(command Op, timeoutPeriod time.Duration) Err {
 	kv.mu.Lock()
+	DPrintf("S%d send %v command to Raft Code", kv.me, command.OpType)
 	index, _, isLeader := kv.rf.Start(command)
 	if !isLeader {
 		kv.mu.Unlock()
