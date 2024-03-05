@@ -502,6 +502,7 @@ func (kv *ShardKV) DecodeSnapShot(snapshot []byte) {
 		kv.SeqMap = SeqMap
 		kv.maxraftstate = MaxRaftState
 		kv.Config = Config
+		kv.LastConfig = LastConfig
 		DPrintf("S%d DecodeSnapShot kv.Config:%v", kv.me, kv.Config)
 	}
 }
