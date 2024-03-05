@@ -119,12 +119,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				var reply PutAppendReply
 				DPrintf("C%v -> S%v send a PutAppend, args: %v\n", ck.clientId, si, args)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && reply.Err == OK {
+				if ok {
 					DPrintf("C%v <- S%v receive a PutAppend resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
+				} else {
+					DPrintf("C%v <- S%v not receive a PutAppend\n", ck.clientId, si)
+				}
+				if ok && reply.Err == OK {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
-					DPrintf("C%v <- S%v receive a PutAppend resp, reply.Err: %v\n", ck.clientId, si, reply.Err)
 					break
 				}
 				// ... not ok, or ErrWrongLeader

@@ -17,6 +17,7 @@ const (
 	ShardNotReady       = "ShardNotReady"
 	ErrInconsistentData = "ErrInconsistentData"
 	ErrOverTime         = "ErrOverTime"
+	ConfigOutdated      = "ConfigOutdated"
 )
 
 const (
@@ -59,4 +60,16 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type SendShardArg struct {
+	LastAppliedRequestId map[int64]int // for receiver to update its state
+	ShardId              int
+	Shard                Shard // Shard to be sent
+	ClientId             int64
+	RequestId            int
+}
+
+type AddShardReply struct {
+	Err Err
 }

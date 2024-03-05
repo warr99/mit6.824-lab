@@ -40,6 +40,10 @@ const NShards = 10
 // +-------------------+ +-------------------+ +-------------------+
 // A configuration -- an assignment of shards to groups.
 // Please don't change this.
+// newConfig: {1 [100 100 100 100 100 100 100 100 100 100] map[100:[server-100-0 server-100-1 server-100-2]]}
+//            {6 [100 100 100 100 100 102 102 102 102 102] map[100:[server-100-0 server-100-1 server-100-2] 102:[server-102-0 server-102-1 server-102-2]]}
+// S0 return ErrWrongGroup, kv.Config.Shards[shardId]:100 != kv.gid:102
+
 type Config struct {
 	Num    int              // 配置的编号,用于唯一标识不同的配置
 	Shards [NShards]int     // shard -> gid 分片集合,在这个lab中一共有10个分片

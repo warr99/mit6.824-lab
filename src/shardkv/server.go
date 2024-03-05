@@ -1,13 +1,16 @@
 package shardkv
 
-import "6.5840/labrpc"
-import "6.5840/raft"
-import "sync"
-import "6.5840/labgob"
-import "6.5840/shardctrler"
-import "time"
-import "sync/atomic"
-import "bytes"
+import (
+	"bytes"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
+	"6.5840/shardctrler"
+)
 
 type Op struct {
 	// Your definitions here.
@@ -18,10 +21,14 @@ type Op struct {
 	OpType   Operation // "get" "put" "append"
 	Key      string
 	Value    string
+	UpConfig shardctrler.Config
+	ShardId  int
+	Shard    Shard
+	SeqMap   map[int64]int
 }
 
 type Shard struct {
-	stateMachine map[string]string
+	StateMachine map[string]string
 	ConfigNum    int // what version this Shard is in
 }
 
@@ -54,7 +61,8 @@ type ShardKV struct {
 
 	dead int32 // set by Kill()
 
-	Config shardctrler.Config
+	LastConfig shardctrler.Config
+	Config     shardctrler.Config
 
 	shardsPersist []Shard
 	waitChMap     map[int]chan OpReply
@@ -71,7 +79,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// 检查当前服务器是否属于该分片的组
 	if kv.Config.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-	} else if kv.shardsPersist[shardId].stateMachine == nil {
+	} else if kv.shardsPersist[shardId].StateMachine == nil {
 		reply.Err = ShardNotReady
 	}
 	kv.mu.Unlock()
@@ -96,11 +104,11 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	if kv.Config.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-	} else if kv.shardsPersist[shardId].stateMachine == nil {
+	} else if kv.shardsPersist[shardId].StateMachine == nil {
 		reply.Err = ShardNotReady
 	} else {
 		reply.Err = OK
-		reply.Value = kv.shardsPersist[shardId].stateMachine[args.Key]
+		reply.Value = kv.shardsPersist[shardId].StateMachine[args.Key]
 	}
 	kv.mu.Unlock()
 }
@@ -111,7 +119,9 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	if kv.Config.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-	} else if kv.shardsPersist[shardId].stateMachine == nil {
+		DPrintf("S%d config: %v", kv.me, kv.Config)
+		DPrintf("S%d return ErrWrongGroup, kv.Config.Shards[%d]:%d != kv.gid:%d", kv.me, shardId, kv.Config.Shards[shardId], kv.gid)
+	} else if kv.shardsPersist[shardId].StateMachine == nil {
 		reply.Err = ShardNotReady
 	}
 	kv.mu.Unlock()
@@ -126,6 +136,19 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Value:    args.Value,
 	}
 	reply.Err = kv.startCommand(command, AppOrPutTimeout)
+}
+
+func (kv *ShardKV) AddShard(args *SendShardArg, reply *AddShardReply) {
+	DPrintf("S%d <- G%d receive add shard req", kv.me, args.ClientId)
+	command := Op{
+		OpType:   AddShardType,
+		ClientId: args.ClientId,
+		SeqId:    args.RequestId,
+		ShardId:  args.ShardId,
+		Shard:    args.Shard,
+		SeqMap:   args.LastAppliedRequestId,
+	}
+	reply.Err = kv.startCommand(command, AddShardsTimeout)
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -167,7 +190,7 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 
 					if kv.Config.Shards[shardId] != kv.gid {
 						reply.Err = ErrWrongGroup
-					} else if kv.shardsPersist[shardId].stateMachine == nil {
+					} else if kv.shardsPersist[shardId].StateMachine == nil {
 						reply.Err = ShardNotReady
 					} else {
 
@@ -176,11 +199,11 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 							kv.SeqMap[op.ClientId] = op.SeqId
 							switch op.OpType {
 							case PutType:
-								DPrintf("S%d handle Raft Code Put applyMsg, Put val to stateMachine", kv.me)
-								kv.shardsPersist[shardId].stateMachine[op.Key] = op.Value
+								DPrintf("S%d handle Raft Code Put applyMsg, Put val to StateMachine", kv.me)
+								kv.shardsPersist[shardId].StateMachine[op.Key] = op.Value
 							case AppendType:
-								DPrintf("S%d handle Raft Code Append applyMsg, Append val to stateMachine", kv.me)
-								kv.shardsPersist[shardId].stateMachine[op.Key] += op.Value
+								DPrintf("S%d handle Raft Code Append applyMsg, Append val to StateMachine", kv.me)
+								kv.shardsPersist[shardId].StateMachine[op.Key] += op.Value
 							case GetType:
 							default:
 								DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
@@ -192,13 +215,19 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 				} else {
 					// request from server of other group
 					switch op.OpType {
-
 					case UpConfigType:
 						DPrintf("S%d handle Raft Code Put UpConfigType", kv.me)
+						kv.upConfigHandler(op)
 					case AddShardType:
 						DPrintf("S%d handle Raft Code Put AddShardType", kv.me)
+						if kv.Config.Num < op.SeqId {
+							reply.Err = ConfigOutdated
+							break
+						}
+						kv.addShardHandler(op)
 					case RemoveShardType:
 						DPrintf("S%d handle Raft Code Put RemoveShardType", kv.me)
+						kv.removeShardHandler(op)
 						// remove operation is from previous UpConfig
 					default:
 						DPrintf("S%d invalid command type: %v.", kv.me, op.OpType)
@@ -226,7 +255,104 @@ func (kv *ShardKV) applyMsgHandlerLoop() {
 			}
 		}
 	}
+}
 
+func (kv *ShardKV) ConfigDetectedLoop() {
+	kv.mu.Lock()
+	curConfig := kv.Config
+	rf := kv.rf
+	kv.mu.Unlock()
+
+	for !kv.killed() {
+		// only leader needs to deal with configuration tasks
+		if _, isLeader := rf.GetState(); !isLeader {
+			time.Sleep(UpConfigLoopInterval)
+			continue
+		}
+		kv.mu.Lock()
+		if !kv.allSent() {
+			SeqMap := make(map[int64]int)
+			for k, v := range kv.SeqMap {
+				SeqMap[k] = v
+			}
+			for shard, gid := range kv.LastConfig.Shards {
+				// 对于当前组（kv.gid）的分片，如果新配置中的对应分片不属于当前组，
+				// 并且当前分片的配置号小于新配置的配置号，说明该分片需要被发送给其他组。
+				if gid == kv.gid && kv.Config.Shards[shard] != kv.gid && kv.shardsPersist[shard].ConfigNum < kv.Config.Num {
+					// 拷贝分片的数据
+					sendDate := kv.cloneShard(kv.Config.Num, kv.shardsPersist[shard].StateMachine)
+					args := SendShardArg{
+						LastAppliedRequestId: SeqMap,
+						ShardId:              shard,
+						Shard:                sendDate,
+						ClientId:             int64(gid),
+						RequestId:            kv.Config.Num,
+					}
+					// shardId -> gid -> server names 找出分片对于的复制组的服务器集合
+					serversList := kv.Config.Groups[kv.Config.Shards[shard]]
+					servers := make([]*labrpc.ClientEnd, len(serversList))
+					for i, name := range serversList {
+						servers[i] = kv.make_end(name)
+					}
+					DPrintf("S%d Send shards to %v", kv.me, servers)
+					// 使用 goroutine 将切片发送给对应的复制组的所有服务器
+					go func(servers []*labrpc.ClientEnd, args *SendShardArg) {
+						index := 0
+						start := time.Now()
+						for {
+							var reply AddShardReply
+							ok := servers[index].Call("ShardKV.AddShard", args, &reply)
+							if ok && reply.Err == OK || time.Since(start) >= 2*time.Second {
+								// 如果成功将切片发送给对应的服务器，GC 掉不属于自己的切片
+								kv.mu.Lock()
+								command := Op{
+									OpType:   RemoveShardType,
+									ClientId: int64(kv.gid),
+									SeqId:    kv.Config.Num,
+									ShardId:  args.ShardId,
+								}
+								kv.mu.Unlock()
+								kv.startCommand(command, RemoveShardsTimeout)
+								break
+							}
+							index = (index + 1) % len(servers)
+							// 如果已经发送了一轮
+							if index == 0 {
+								time.Sleep(UpConfigLoopInterval)
+							}
+						}
+					}(servers, &args)
+				}
+			}
+			kv.mu.Unlock()
+			time.Sleep(UpConfigLoopInterval)
+			continue
+		}
+
+		if !kv.allReceived() {
+			kv.mu.Unlock()
+			time.Sleep(UpConfigLoopInterval)
+			continue
+		}
+
+		curConfig = kv.Config
+		sck := kv.mck
+		kv.mu.Unlock()
+		newConfig := sck.Query(curConfig.Num + 1)
+		DPrintf("S%d found newConfig: %v", kv.me, newConfig)
+		if newConfig.Num != curConfig.Num+1 {
+			time.Sleep(UpConfigLoopInterval)
+			continue
+		}
+
+		command := Op{
+			OpType:   UpConfigType,
+			ClientId: int64(kv.gid),
+			SeqId:    newConfig.Num,
+			UpConfig: newConfig,
+		}
+		kv.startCommand(command, UpConfigTimeout)
+	}
 }
 
 // servers[] contains the ports of the servers in this group.
@@ -285,13 +411,11 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	go kv.applyMsgHandlerLoop()
-
+	go kv.ConfigDetectedLoop()
 	return kv
 }
 
 func (kv *ShardKV) getWaitCh(index int) chan OpReply {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	ch, exist := kv.waitChMap[index]
 	if !exist {
 		kv.waitChMap[index] = make(chan OpReply, 1)
@@ -352,6 +476,9 @@ func (kv *ShardKV) PersistSnapShot() []byte {
 	if e.Encode(kv.Config) != nil {
 		DPrintf("S%d fails to encode Config.", kv.me)
 	}
+	if e.Encode(kv.LastConfig) != nil {
+		DPrintf("S%d fails to encode LastConfig.", kv.me)
+	}
 	return w.Bytes()
 }
 
@@ -375,5 +502,83 @@ func (kv *ShardKV) DecodeSnapShot(snapshot []byte) {
 		kv.SeqMap = SeqMap
 		kv.maxraftstate = MaxRaftState
 		kv.Config = Config
+		DPrintf("S%d DecodeSnapShot kv.Config:%v", kv.me, kv.Config)
 	}
+}
+
+func (kv *ShardKV) upConfigHandler(op Op) {
+	curConfig := kv.Config
+	upConfig := op.UpConfig
+	if curConfig.Num >= upConfig.Num {
+		return
+	}
+	for shard, gid := range upConfig.Shards {
+		if gid == kv.gid && curConfig.Shards[shard] == 0 {
+			kv.shardsPersist[shard].StateMachine = make(map[string]string)
+			kv.shardsPersist[shard].ConfigNum = upConfig.Num
+			if kv.shardsPersist[shard].StateMachine != nil {
+				DPrintf("S%d kv.shardsPersist[%d].StateMachine != nil\n", kv.me, shard)
+			}
+		}
+	}
+	kv.LastConfig = curConfig
+	kv.Config = upConfig
+	DPrintf("S%d new kv.Config:%v", kv.me, kv.Config)
+}
+
+func (kv *ShardKV) addShardHandler(op Op) {
+	if kv.shardsPersist[op.ShardId].StateMachine != nil || op.Shard.ConfigNum < kv.Config.Num {
+		return
+	}
+	kv.shardsPersist[op.ShardId] = kv.cloneShard(op.Shard.ConfigNum, op.Shard.StateMachine)
+	for clientId, seqId := range op.SeqMap {
+		if r, ok := kv.SeqMap[clientId]; !ok || r < seqId {
+			kv.SeqMap[clientId] = seqId
+		}
+	}
+}
+
+func (kv *ShardKV) removeShardHandler(op Op) {
+	if op.SeqId < kv.Config.Num {
+		return
+	}
+	kv.shardsPersist[op.ShardId].StateMachine = nil
+	kv.shardsPersist[op.ShardId].ConfigNum = op.SeqId
+}
+
+func (kv *ShardKV) allSent() bool {
+	for shard, gid := range kv.LastConfig.Shards {
+		// 对于当前组（kv.gid）的分片，如果新配置中的对应分片不属于当前组，
+		// 并且当前分片的配置号小于新配置的配置号，说明该分片需要被发送给其他组。
+		if gid == kv.gid && kv.Config.Shards[shard] != kv.gid && kv.shardsPersist[shard].ConfigNum < kv.Config.Num {
+			return false
+		}
+	}
+	return true
+}
+
+func (kv *ShardKV) allReceived() bool {
+	for shard, gid := range kv.LastConfig.Shards {
+		// gid != kv.gid                                     -> 在旧的配置中不属于当前复制组,也就是在现有的配置中可能需要被当前服务器接收
+		// kv.Config.Shards[shard] == kv.gid                 -> 切片属于当前复制组
+		// kv.shardsPersist[shard].ConfigNum < kv.Config.Num -> 当前分片的配置号小于新配置的配置号，说明该分片需要被接收
+		if gid != kv.gid && kv.Config.Shards[shard] == kv.gid && kv.shardsPersist[shard].ConfigNum < kv.Config.Num {
+			return false
+		}
+	}
+	return true
+}
+
+func (kv *ShardKV) cloneShard(ConfigNum int, KvMap map[string]string) Shard {
+
+	migrateShard := Shard{
+		StateMachine: make(map[string]string),
+		ConfigNum:    ConfigNum,
+	}
+
+	for k, v := range KvMap {
+		migrateShard.StateMachine[k] = v
+	}
+
+	return migrateShard
 }
