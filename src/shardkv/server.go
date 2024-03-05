@@ -119,8 +119,6 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	if kv.Config.Shards[shardId] != kv.gid {
 		reply.Err = ErrWrongGroup
-		DPrintf("S%d config: %v", kv.me, kv.Config)
-		DPrintf("S%d return ErrWrongGroup, kv.Config.Shards[%d]:%d != kv.gid:%d", kv.me, shardId, kv.Config.Shards[shardId], kv.gid)
 	} else if kv.shardsPersist[shardId].StateMachine == nil {
 		reply.Err = ShardNotReady
 	}
@@ -339,7 +337,7 @@ func (kv *ShardKV) ConfigDetectedLoop() {
 		sck := kv.mck
 		kv.mu.Unlock()
 		newConfig := sck.Query(curConfig.Num + 1)
-		DPrintf("S%d found newConfig: %v", kv.me, newConfig)
+		DPrintf("S%d found config: %v", kv.me, newConfig)
 		if newConfig.Num != curConfig.Num+1 {
 			time.Sleep(UpConfigLoopInterval)
 			continue
@@ -503,7 +501,6 @@ func (kv *ShardKV) DecodeSnapShot(snapshot []byte) {
 		kv.maxraftstate = MaxRaftState
 		kv.Config = Config
 		kv.LastConfig = LastConfig
-		DPrintf("S%d DecodeSnapShot kv.Config:%v", kv.me, kv.Config)
 	}
 }
 
@@ -517,14 +514,10 @@ func (kv *ShardKV) upConfigHandler(op Op) {
 		if gid == kv.gid && curConfig.Shards[shard] == 0 {
 			kv.shardsPersist[shard].StateMachine = make(map[string]string)
 			kv.shardsPersist[shard].ConfigNum = upConfig.Num
-			if kv.shardsPersist[shard].StateMachine != nil {
-				DPrintf("S%d kv.shardsPersist[%d].StateMachine != nil\n", kv.me, shard)
-			}
 		}
 	}
 	kv.LastConfig = curConfig
 	kv.Config = upConfig
-	DPrintf("S%d new kv.Config:%v", kv.me, kv.Config)
 }
 
 func (kv *ShardKV) addShardHandler(op Op) {
